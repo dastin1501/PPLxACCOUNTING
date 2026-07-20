@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../models/product.dart';
 import '../models/sale.dart';
-import '../models/stock_item.dart';
 import '../services/database_helper.dart';
 import '../widgets/cart_line_tile.dart';
 import '../widgets/product_picker_tile.dart';
+import '../widgets/variant_picker_sheet.dart';
 
 /// The point-of-sale "checkout" screen: pick products to build a cart, then
 /// complete the sale, which decrements stock quantities accordingly.
@@ -22,12 +23,12 @@ class SellScreen extends StatefulWidget {
 class SellScreenState extends State<SellScreen> {
   final _db = DatabaseHelper.instance;
 
-  List<StockItem> _stocks = [];
+  List<Product> _products = [];
   bool _loading = true;
   String _query = '';
 
-  // stockId -> quantity in cart.
-  final Map<String, int> _cart = {};
+  // variantId -> cart line (product + variant + quantity).
+  final Map<String, CartLine> _cart = {};
   bool _checkingOut = false;
 
   DiscountType _discountType = DiscountType.none;
@@ -36,7 +37,7 @@ class SellScreenState extends State<SellScreen> {
   @override
   void initState() {
     super.initState();
-    _loadStocks();
+    _loadProducts();
     _discountCtrl.addListener(() => setState(() {}));
   }
 
@@ -46,46 +47,49 @@ class SellScreenState extends State<SellScreen> {
     super.dispose();
   }
 
-  /// Reloads stock data from the database. Called externally (e.g. by the
+  /// Reloads product data from the database. Called externally (e.g. by the
   /// navigation shell) whenever the Inventory tab may have changed items,
   /// so newly added/edited products show up here without restarting the app.
-  Future<void> refresh() => _loadStocks();
+  Future<void> refresh() => _loadProducts();
 
-  Future<void> _loadStocks() async {
+  Future<void> _loadProducts() async {
     setState(() => _loading = true);
-    final stocks = await _db.getAllStocks();
+    final products = await _db.getAllProducts();
     setState(() {
-      _stocks = stocks;
+      _products = products;
       _loading = false;
-      // Drop any cart lines whose item no longer exists.
-      _cart.removeWhere((id, _) => !_stocks.any((s) => s.id == id));
+
+      // Re-sync any existing cart lines against fresh product/variant data,
+      // dropping lines whose product/variant no longer exists and clamping
+      // quantities that now exceed what's on hand.
+      final updated = <String, CartLine>{};
+      for (final entry in _cart.entries) {
+        final product = _products.where((p) => p.id == entry.value.product.id).firstOrNull;
+        if (product == null) continue;
+        final variant = product.variants.where((v) => v.id == entry.key).firstOrNull;
+        if (variant == null) continue;
+        final qty = entry.value.quantity.clamp(0, variant.quantity);
+        if (qty <= 0) continue;
+        updated[entry.key] = CartLine(product: product, variant: variant, quantity: qty);
+      }
+      _cart
+        ..clear()
+        ..addAll(updated);
     });
   }
 
-  List<StockItem> get _filteredStocks {
-    if (_query.trim().isEmpty) return _stocks;
+  List<Product> get _filteredProducts {
+    if (_query.trim().isEmpty) return _products;
     final q = _query.trim().toLowerCase();
-    return _stocks
-        .where((s) => s.name.toLowerCase().contains(q) || s.sku.toLowerCase().contains(q) || s.category.toLowerCase().contains(q))
-        .toList();
+    return _products.where((p) {
+      if (p.name.toLowerCase().contains(q) || p.category.toLowerCase().contains(q)) return true;
+      return p.variants.any(
+        (v) => v.sku.toLowerCase().contains(q) || v.size.toLowerCase().contains(q) || v.color.toLowerCase().contains(q),
+      );
+    }).toList();
   }
 
-  Map<StockItem, int> get _cartItems {
-    final result = <StockItem, int>{};
-    for (final entry in _cart.entries) {
-      final item = _stocks.where((s) => s.id == entry.key).firstOrNull;
-      if (item != null) result[item] = entry.value;
-    }
-    return result;
-  }
-
-  double get _cartSubtotal {
-    var total = 0.0;
-    for (final entry in _cartItems.entries) {
-      total += entry.key.price * entry.value;
-    }
-    return total;
-  }
+  double get _cartSubtotal => _cart.values.fold(0.0, (sum, line) => sum + line.subtotal);
 
   double get _discountValue => double.tryParse(_discountCtrl.text.trim()) ?? 0;
 
@@ -93,7 +97,10 @@ class SellScreenState extends State<SellScreen> {
 
   double get _cartTotal => _cartSubtotal - _discountAmount;
 
-  int get _cartItemCount => _cart.values.fold(0, (sum, q) => sum + q);
+  int get _cartItemCount => _cart.values.fold(0, (sum, line) => sum + line.quantity);
+
+  int _cartQuantityForProduct(Product product) =>
+      _cart.values.where((l) => l.product.id == product.id).fold(0, (sum, l) => sum + l.quantity);
 
   void _setDiscountType(DiscountType type) {
     setState(() {
@@ -102,30 +109,45 @@ class SellScreenState extends State<SellScreen> {
     });
   }
 
-  void _addToCart(StockItem item) {
-    final current = _cart[item.id] ?? 0;
-    if (current >= item.quantity) {
+  void _addToCart(Product product, ProductVariant variant, int qtyToAdd) {
+    final current = _cart[variant.id]?.quantity ?? 0;
+    final newQty = current + qtyToAdd;
+    if (newQty > variant.quantity) {
+      final label = product.name + (variant.hasVariantLabel ? ' (${variant.label})' : '');
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Only ${item.quantity} ${item.unit} of "${item.name}" available')),
+        SnackBar(content: Text('Only ${variant.quantity} ${product.unit} of "$label" available')),
       );
       return;
     }
-    setState(() => _cart[item.id] = current + 1);
+    setState(() => _cart[variant.id] = CartLine(product: product, variant: variant, quantity: newQty));
   }
 
-  void _increment(StockItem item) => _addToCart(item);
+  void _onProductTap(Product product) {
+    if (!product.hasVariants) {
+      _addToCart(product, product.variants.first, 1);
+      return;
+    }
+    showVariantPickerSheet(
+      context: context,
+      product: product,
+      cartQuantityForVariant: (v) => _cart[v.id]?.quantity ?? 0,
+      onAddToCart: (variant, qty) => _addToCart(product, variant, qty),
+    );
+  }
 
-  void _decrement(StockItem item) {
-    final current = _cart[item.id] ?? 0;
+  void _increment(CartLine line) => _addToCart(line.product, line.variant, 1);
+
+  void _decrement(CartLine line) {
+    final current = line.quantity;
     if (current <= 1) {
-      setState(() => _cart.remove(item.id));
+      setState(() => _cart.remove(line.variant.id));
     } else {
-      setState(() => _cart[item.id] = current - 1);
+      setState(() => _cart[line.variant.id] = line.copyWith(quantity: current - 1));
     }
   }
 
-  void _removeLine(StockItem item) {
-    setState(() => _cart.remove(item.id));
+  void _removeLine(CartLine line) {
+    setState(() => _cart.remove(line.variant.id));
   }
 
   void _clearCart() {
@@ -141,14 +163,14 @@ class SellScreenState extends State<SellScreen> {
     setState(() => _checkingOut = true);
     try {
       final sale = await _db.recordSale(
-        _cartItems,
+        _cart.values.toList(),
         discountType: _discountType,
         discountValue: _discountValue,
       );
       _cart.clear();
       _discountType = DiscountType.none;
       _discountCtrl.clear();
-      await _loadStocks();
+      await _loadProducts();
       widget.onSaleCompleted();
       if (!mounted) return;
       await _showReceiptDialog(sale);
@@ -157,7 +179,7 @@ class SellScreenState extends State<SellScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.toString())),
       );
-      await _loadStocks();
+      await _loadProducts();
     } finally {
       if (mounted) setState(() => _checkingOut = false);
     }
@@ -184,8 +206,24 @@ class SellScreenState extends State<SellScreen> {
                 (line) => Padding(
                   padding: const EdgeInsets.symmetric(vertical: 2),
                   child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(child: Text('${line.name} x${line.quantity}')),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('${line.name} x${line.quantity}'),
+                            if (line.hasVariant)
+                              Text(
+                                _saleLineVariantLabel(line.size, line.color),
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(color: Theme.of(context).colorScheme.outline),
+                              ),
+                          ],
+                        ),
+                      ),
                       Text('\u20b1${line.subtotal.toStringAsFixed(2)}'),
                     ],
                   ),
@@ -291,19 +329,21 @@ class SellScreenState extends State<SellScreen> {
         Expanded(
           child: _loading
               ? const Center(child: CircularProgressIndicator())
-              : _filteredStocks.isEmpty
+              : _filteredProducts.isEmpty
                   ? Center(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Icon(
-                            _stocks.isEmpty ? Icons.inventory_2_outlined : Icons.search_off,
+                            _products.isEmpty ? Icons.inventory_2_outlined : Icons.search_off,
                             size: 48,
                             color: Theme.of(context).colorScheme.outline,
                           ),
                           const SizedBox(height: 12),
                           Text(
-                            _stocks.isEmpty ? 'No stock items yet.\nAdd items in the Inventory tab first.' : 'No items match your search',
+                            _products.isEmpty
+                                ? 'No products yet.\nAdd items in the Inventory tab first.'
+                                : 'No items match your search',
                             textAlign: TextAlign.center,
                             style: TextStyle(color: Theme.of(context).colorScheme.outline),
                           ),
@@ -314,17 +354,17 @@ class SellScreenState extends State<SellScreen> {
                       padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
                       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                         maxCrossAxisExtent: 240,
-                        mainAxisExtent: 172,
+                        mainAxisExtent: 316,
                         crossAxisSpacing: 14,
                         mainAxisSpacing: 14,
                       ),
-                      itemCount: _filteredStocks.length,
+                      itemCount: _filteredProducts.length,
                       itemBuilder: (context, index) {
-                        final item = _filteredStocks[index];
+                        final product = _filteredProducts[index];
                         return ProductPickerTile(
-                          item: item,
-                          cartQuantity: _cart[item.id] ?? 0,
-                          onTap: () => _addToCart(item),
+                          item: product,
+                          cartQuantity: _cartQuantityForProduct(product),
+                          onTap: () => _onProductTap(product),
                         );
                       },
                     ),
@@ -334,7 +374,7 @@ class SellScreenState extends State<SellScreen> {
   }
 
   Widget _buildCartPane() {
-    final cartItems = _cartItems;
+    final cartLines = _cart.values.toList();
     return Column(
       children: [
         Padding(
@@ -345,13 +385,13 @@ class SellScreenState extends State<SellScreen> {
               const SizedBox(width: 8),
               Text('Current sale', style: Theme.of(context).textTheme.titleLarge),
               const Spacer(),
-              if (cartItems.isNotEmpty)
+              if (cartLines.isNotEmpty)
                 TextButton(onPressed: _clearCart, child: const Text('Clear')),
             ],
           ),
         ),
         Expanded(
-          child: cartItems.isEmpty
+          child: cartLines.isEmpty
               ? Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -367,14 +407,13 @@ class SellScreenState extends State<SellScreen> {
                 )
               : ListView(
                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-                  children: cartItems.entries
+                  children: cartLines
                       .map(
-                        (e) => CartLineTile(
-                          item: e.key,
-                          quantity: e.value,
-                          onIncrement: e.value < e.key.quantity ? () => _increment(e.key) : null,
-                          onDecrement: () => _decrement(e.key),
-                          onRemove: () => _removeLine(e.key),
+                        (line) => CartLineTile(
+                          cartLine: line,
+                          onIncrement: line.quantity < line.variant.quantity ? () => _increment(line) : null,
+                          onDecrement: () => _decrement(line),
+                          onRemove: () => _removeLine(line),
                         ),
                       )
                       .toList(),
@@ -533,4 +572,9 @@ class SellScreenState extends State<SellScreen> {
 
 extension _FirstOrNull<T> on Iterable<T> {
   T? get firstOrNull => isEmpty ? null : first;
+}
+
+/// Formats a sold item's size/color snapshot for display, e.g. "M, Grey".
+String _saleLineVariantLabel(String size, String color) {
+  return [size, color].where((v) => v.isNotEmpty).join(', ');
 }

@@ -1,6 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
-import '../models/stock_item.dart';
+import '../models/product.dart';
+import '../services/image_storage_service.dart';
+import 'variant_badges.dart';
 
 class StockListTile extends StatelessWidget {
   const StockListTile({
@@ -11,7 +15,7 @@ class StockListTile extends StatelessWidget {
     required this.onDelete,
   });
 
-  final StockItem item;
+  final Product item;
   final bool selected;
   final VoidCallback onTap;
   final VoidCallback onDelete;
@@ -20,6 +24,7 @@ class StockListTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final lowStock = item.isLowStock;
+    final hasVariants = item.hasVariants;
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -34,19 +39,40 @@ class StockListTile extends StatelessWidget {
       child: ListTile(
         onTap: onTap,
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        leading: CircleAvatar(
-          radius: 22,
-          backgroundColor: lowStock ? theme.colorScheme.errorContainer : theme.colorScheme.secondaryContainer,
-          child: Icon(
-            lowStock ? Icons.warning_amber_rounded : Icons.inventory_2_outlined,
-            color: lowStock ? theme.colorScheme.onErrorContainer : theme.colorScheme.onSecondaryContainer,
-          ),
-        ),
+        leading: ImageStorageService.exists(item.imagePath)
+            ? CircleAvatar(radius: 26, backgroundImage: FileImage(File(item.imagePath!)))
+            : CircleAvatar(
+                radius: 26,
+                backgroundColor: lowStock ? theme.colorScheme.errorContainer : theme.colorScheme.secondaryContainer,
+                child: Icon(
+                  lowStock ? Icons.warning_amber_rounded : Icons.inventory_2_outlined,
+                  color: lowStock ? theme.colorScheme.onErrorContainer : theme.colorScheme.onSecondaryContainer,
+                ),
+              ),
         title: Text(
           item.name,
           style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
         ),
-        subtitle: Text('SKU: ${item.sku}  •  ${item.category}'),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              hasVariants
+                  ? '${item.variants.length} variants  •  ${item.category}'
+                  : 'SKU: ${item.variants.first.sku}  •  ${item.category}',
+            ),
+            if (hasVariants) ...[
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: item.variants
+                    .map((v) => VariantBadges(size: v.size, color: v.color, dense: true))
+                    .toList(),
+              ),
+            ],
+          ],
+        ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -54,7 +80,7 @@ class StockListTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  '${item.quantity} ${item.unit}',
+                  '${item.totalQuantity} ${item.unit}',
                   style: theme.textTheme.titleMedium?.copyWith(
                     color: lowStock ? theme.colorScheme.error : null,
                     fontWeight: FontWeight.bold,

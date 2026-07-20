@@ -1,20 +1,19 @@
 import 'package:flutter/material.dart';
 
-import '../models/stock_item.dart';
+import '../models/product.dart';
+import 'variant_badges.dart';
 
 /// A single line in the checkout cart, with +/- quantity controls.
 class CartLineTile extends StatelessWidget {
   const CartLineTile({
     super.key,
-    required this.item,
-    required this.quantity,
+    required this.cartLine,
     required this.onIncrement,
     required this.onDecrement,
     required this.onRemove,
   });
 
-  final StockItem item;
-  final int quantity;
+  final CartLine cartLine;
   final VoidCallback? onIncrement;
   final VoidCallback onDecrement;
   final VoidCallback onRemove;
@@ -22,7 +21,8 @@ class CartLineTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final subtotal = item.price * quantity;
+    final variant = cartLine.variant;
+    final quantity = cartLine.quantity;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -38,13 +38,18 @@ class CartLineTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  item.name,
+                  cartLine.product.name,
                   style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
+                if (variant.hasVariantLabel) ...[
+                  const SizedBox(height: 3),
+                  VariantBadges(size: variant.size, color: variant.color, dense: true),
+                  const SizedBox(height: 3),
+                ],
                 Text(
-                  '\u20b1${item.price.toStringAsFixed(2)} x $quantity',
+                  '\u20b1${cartLine.unitPrice.toStringAsFixed(2)} x $quantity',
                   style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
                 ),
               ],
@@ -86,7 +91,7 @@ class CartLineTile extends StatelessWidget {
           SizedBox(
             width: 76,
             child: Text(
-              '\u20b1${subtotal.toStringAsFixed(2)}',
+              '\u20b1${cartLine.subtotal.toStringAsFixed(2)}',
               textAlign: TextAlign.right,
               style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold),
             ),

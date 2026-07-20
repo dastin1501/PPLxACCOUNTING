@@ -2,8 +2,8 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
+import '../models/product.dart';
 import '../models/sale.dart';
-import '../models/stock_item.dart';
 
 /// Thrown when a sale can't be completed because one or more cart lines
 /// exceed the currently available stock quantity.
@@ -24,8 +24,13 @@ class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._internal();
 
   static const _dbName = 'pos_app.db';
-  static const _dbVersion = 3;
-  static const table = 'stocks';
+  static const _dbVersion = 5;
+
+  /// Legacy flat stock table (pre-variants). Only read during migration.
+  static const _legacyStocksTable = 'stocks';
+
+  static const productsTable = 'products';
+  static const variantsTable = 'product_variants';
   static const salesTable = 'sales';
   static const saleItemsTable = 'sale_items';
 
@@ -48,21 +53,36 @@ class DatabaseHelper {
   }
 
   Future<void> _onCreate(Database db, int version) async {
+    await _createProductTables(db);
+    await _createSalesTables(db);
+  }
+
+  Future<void> _createProductTables(Database db) async {
     await db.execute('''
-      CREATE TABLE $table (
+      CREATE TABLE $productsTable (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        sku TEXT NOT NULL,
         category TEXT NOT NULL,
-        quantity INTEGER NOT NULL,
         unit TEXT NOT NULL,
         price REAL NOT NULL,
         costPrice REAL NOT NULL,
-        lowStockThreshold INTEGER NOT NULL,
+        imagePath TEXT,
         updatedAt TEXT NOT NULL
       )
     ''');
-    await _createSalesTables(db);
+    await db.execute('''
+      CREATE TABLE $variantsTable (
+        id TEXT PRIMARY KEY,
+        productId TEXT NOT NULL,
+        sku TEXT NOT NULL,
+        size TEXT NOT NULL DEFAULT '',
+        color TEXT NOT NULL DEFAULT '',
+        quantity INTEGER NOT NULL,
+        lowStockThreshold INTEGER NOT NULL,
+        updatedAt TEXT NOT NULL,
+        FOREIGN KEY (productId) REFERENCES $productsTable (id)
+      )
+    ''');
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -74,6 +94,70 @@ class DatabaseHelper {
       await db.execute('ALTER TABLE $salesTable ADD COLUMN discountValue REAL NOT NULL DEFAULT 0');
       await db.execute('ALTER TABLE $salesTable ADD COLUMN discountAmount REAL NOT NULL DEFAULT 0');
     }
+    if (oldVersion < 4) {
+      await db.execute("ALTER TABLE $_legacyStocksTable ADD COLUMN size TEXT NOT NULL DEFAULT ''");
+      await db.execute("ALTER TABLE $_legacyStocksTable ADD COLUMN color TEXT NOT NULL DEFAULT ''");
+      await db.execute("ALTER TABLE $saleItemsTable ADD COLUMN size TEXT NOT NULL DEFAULT ''");
+      await db.execute("ALTER TABLE $saleItemsTable ADD COLUMN color TEXT NOT NULL DEFAULT ''");
+    }
+    if (oldVersion < 5) {
+      await _migrateStocksToProducts(db);
+    }
+  }
+
+  /// Splits the old flat `stocks` table into `products` + `product_variants`,
+  /// grouping rows that share the exact same product name into a single
+  /// product with multiple variants (one per original row). Each variant
+  /// reuses its original stock row's id, so `sale_items.stockId` on existing
+  /// sales keeps pointing at a valid record with no further changes needed.
+  ///
+  /// The original `stocks` table is kept around (renamed) as a safety net
+  /// rather than dropped.
+  Future<void> _migrateStocksToProducts(Database db) async {
+    await _createProductTables(db);
+
+    final legacyRows = await db.query(_legacyStocksTable, orderBy: 'name COLLATE NOCASE ASC');
+    final groups = <String, List<Map<String, Object?>>>{};
+    for (final row in legacyRows) {
+      final name = row['name'] as String;
+      groups.putIfAbsent(name, () => []).add(row);
+    }
+
+    await db.transaction((txn) async {
+      for (final entry in groups.entries) {
+        final rows = entry.value;
+        // Product-level fields (category/unit/price/cost) come from the
+        // first row in the group; low-stock threshold stays per-variant.
+        final first = rows.first;
+        final productId = const Uuid().v4();
+
+        await txn.insert(productsTable, {
+          'id': productId,
+          'name': entry.key,
+          'category': first['category'],
+          'unit': first['unit'],
+          'price': first['price'],
+          'costPrice': first['costPrice'],
+          'imagePath': null,
+          'updatedAt': first['updatedAt'],
+        });
+
+        for (final row in rows) {
+          await txn.insert(variantsTable, {
+            'id': row['id'],
+            'productId': productId,
+            'sku': row['sku'],
+            'size': row['size'] ?? '',
+            'color': row['color'] ?? '',
+            'quantity': row['quantity'],
+            'lowStockThreshold': row['lowStockThreshold'],
+            'updatedAt': row['updatedAt'],
+          });
+        }
+      }
+
+      await txn.execute('ALTER TABLE $_legacyStocksTable RENAME TO stocks_legacy_v4');
+    });
   }
 
   Future<void> _createSalesTables(Database db) async {
@@ -95,70 +179,107 @@ class DatabaseHelper {
         sku TEXT NOT NULL,
         unitPrice REAL NOT NULL,
         quantity INTEGER NOT NULL,
+        size TEXT NOT NULL DEFAULT '',
+        color TEXT NOT NULL DEFAULT '',
         FOREIGN KEY (saleId) REFERENCES $salesTable (id)
       )
     ''');
   }
 
-  Future<List<StockItem>> getAllStocks() async {
-    final db = await database;
-    final rows = await db.query(table, orderBy: 'name COLLATE NOCASE ASC');
-    return rows.map(StockItem.fromMap).toList();
+  Future<List<ProductVariant>> _variantsForProduct(DatabaseExecutor db, String productId) async {
+    final rows = await db.query(
+      variantsTable,
+      where: 'productId = ?',
+      whereArgs: [productId],
+      orderBy: 'size COLLATE NOCASE ASC, color COLLATE NOCASE ASC',
+    );
+    return rows.map(ProductVariant.fromMap).toList();
   }
 
-  Future<StockItem?> getStockById(String id) async {
+  Future<List<Product>> getAllProducts() async {
     final db = await database;
-    final rows = await db.query(table, where: 'id = ?', whereArgs: [id]);
+    final rows = await db.query(productsTable, orderBy: 'name COLLATE NOCASE ASC');
+    final products = <Product>[];
+    for (final row in rows) {
+      final variants = await _variantsForProduct(db, row['id'] as String);
+      products.add(Product.fromMap(row, variants));
+    }
+    return products;
+  }
+
+  Future<Product?> getProductById(String id) async {
+    final db = await database;
+    final rows = await db.query(productsTable, where: 'id = ?', whereArgs: [id]);
     if (rows.isEmpty) return null;
-    return StockItem.fromMap(rows.first);
+    final variants = await _variantsForProduct(db, id);
+    return Product.fromMap(rows.first, variants);
   }
 
-  Future<void> insertStock(StockItem item) async {
+  /// Inserts or fully replaces a product and its variant list in one
+  /// transaction. Any variants no longer present in [product.variants] are
+  /// deleted; the rest are upserted.
+  Future<void> saveProduct(Product product) async {
     final db = await database;
-    await db.insert(
-      table,
-      item.toMap(),
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.transaction((txn) async {
+      await txn.insert(
+        productsTable,
+        product.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+
+      final existingIds = (await txn.query(
+        variantsTable,
+        columns: ['id'],
+        where: 'productId = ?',
+        whereArgs: [product.id],
+      )).map((r) => r['id'] as String).toSet();
+
+      final keptIds = product.variants.map((v) => v.id).toSet();
+      final removedIds = existingIds.difference(keptIds);
+      for (final id in removedIds) {
+        await txn.delete(variantsTable, where: 'id = ?', whereArgs: [id]);
+      }
+
+      for (final variant in product.variants) {
+        await txn.insert(
+          variantsTable,
+          variant.toMap(),
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
   }
 
-  Future<void> updateStock(StockItem item) async {
+  Future<void> deleteProduct(String id) async {
     final db = await database;
-    await db.update(
-      table,
-      item.toMap(),
-      where: 'id = ?',
-      whereArgs: [item.id],
-    );
+    await db.transaction((txn) async {
+      await txn.delete(variantsTable, where: 'productId = ?', whereArgs: [id]);
+      await txn.delete(productsTable, where: 'id = ?', whereArgs: [id]);
+    });
   }
 
-  Future<void> deleteStock(String id) async {
-    final db = await database;
-    await db.delete(table, where: 'id = ?', whereArgs: [id]);
-  }
-
-  Future<bool> skuExists(String sku, {String? excludingId}) async {
+  Future<bool> skuExists(String sku, {String? excludingVariantId}) async {
     final db = await database;
     final rows = await db.query(
-      table,
-      where: excludingId == null ? 'sku = ?' : 'sku = ? AND id != ?',
-      whereArgs: excludingId == null ? [sku] : [sku, excludingId],
+      variantsTable,
+      where: excludingVariantId == null ? 'sku = ?' : 'sku = ? AND id != ?',
+      whereArgs: excludingVariantId == null ? [sku] : [sku, excludingVariantId],
     );
     return rows.isNotEmpty;
   }
 
-  /// Completes a sale for the given cart (stock item -> quantity to sell),
-  /// decrementing each item's stock quantity and persisting a sale record.
+  /// Completes a sale for the given cart lines, decrementing each variant's
+  /// stock quantity and persisting a sale record.
   ///
   /// An optional discount can be applied to the cart's subtotal: pass
   /// [discountType]/[discountValue] as a flat peso amount ([DiscountType.fixed])
   /// or a percentage 0-100 ([DiscountType.percent]). The resulting discount is
   /// clamped so it never makes the total negative.
   ///
-  /// Runs inside a single transaction: if any line would oversell an item,
+  /// Runs inside a single transaction: if any line would oversell a variant,
   /// [InsufficientStockException] is thrown and nothing is written.
   Future<Sale> recordSale(
-    Map<StockItem, int> cart, {
+    List<CartLine> cart, {
     DiscountType discountType = DiscountType.none,
     double discountValue = 0,
   }) async {
@@ -172,22 +293,21 @@ class DatabaseHelper {
     final lineItems = <SaleLineItem>[];
 
     await db.transaction((txn) async {
-      for (final entry in cart.entries) {
-        final stockItem = entry.key;
-        final requestedQty = entry.value;
-
-        final rows = await txn.query(table, where: 'id = ?', whereArgs: [stockItem.id]);
+      for (final cartLine in cart) {
+        final rows = await txn.query(variantsTable, where: 'id = ?', whereArgs: [cartLine.variant.id]);
         if (rows.isEmpty) continue;
-        final current = StockItem.fromMap(rows.first);
+        final current = ProductVariant.fromMap(rows.first);
 
-        if (current.quantity < requestedQty) {
-          throw InsufficientStockException(current.name, current.quantity, requestedQty);
+        if (current.quantity < cartLine.quantity) {
+          final itemName = cartLine.product.name +
+              (current.hasVariantLabel ? ' (${current.label})' : '');
+          throw InsufficientStockException(itemName, current.quantity, cartLine.quantity);
         }
 
         await txn.update(
-          table,
+          variantsTable,
           {
-            'quantity': current.quantity - requestedQty,
+            'quantity': current.quantity - cartLine.quantity,
             'updatedAt': createdAt.toIso8601String(),
           },
           where: 'id = ?',
@@ -198,10 +318,12 @@ class DatabaseHelper {
           id: const Uuid().v4(),
           saleId: saleId,
           stockId: current.id,
-          name: current.name,
+          name: cartLine.product.name,
           sku: current.sku,
-          unitPrice: current.price,
-          quantity: requestedQty,
+          unitPrice: cartLine.product.price,
+          quantity: cartLine.quantity,
+          size: current.size,
+          color: current.color,
         ));
       }
 
@@ -256,8 +378,8 @@ class DatabaseHelper {
   }
 
   /// Deletes (voids) a sale and restores the quantities it deducted back
-  /// onto their stock items, so inventory counts stay accurate. Stock items
-  /// that have since been deleted are simply skipped.
+  /// onto their product variants, so inventory counts stay accurate.
+  /// Variants that have since been deleted are simply skipped.
   Future<void> deleteSale(String saleId) async {
     final db = await database;
     await db.transaction((txn) async {
@@ -265,11 +387,11 @@ class DatabaseHelper {
 
       for (final lineRow in lineRows) {
         final line = SaleLineItem.fromMap(lineRow);
-        final stockRows = await txn.query(table, where: 'id = ?', whereArgs: [line.stockId]);
-        if (stockRows.isEmpty) continue;
-        final current = StockItem.fromMap(stockRows.first);
+        final variantRows = await txn.query(variantsTable, where: 'id = ?', whereArgs: [line.stockId]);
+        if (variantRows.isEmpty) continue;
+        final current = ProductVariant.fromMap(variantRows.first);
         await txn.update(
-          table,
+          variantsTable,
           {
             'quantity': current.quantity + line.quantity,
             'updatedAt': DateTime.now().toIso8601String(),

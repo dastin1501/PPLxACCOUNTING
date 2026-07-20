@@ -10,6 +10,10 @@ class SaleLineItem {
   final double unitPrice;
   final int quantity;
 
+  /// Size/color variant snapshot at the time of sale, if the item had one.
+  final String size;
+  final String color;
+
   const SaleLineItem({
     required this.id,
     required this.saleId,
@@ -18,9 +22,13 @@ class SaleLineItem {
     required this.sku,
     required this.unitPrice,
     required this.quantity,
+    this.size = '',
+    this.color = '',
   });
 
   double get subtotal => unitPrice * quantity;
+
+  bool get hasVariant => size.isNotEmpty || color.isNotEmpty;
 
   Map<String, Object?> toMap() {
     return {
@@ -31,6 +39,8 @@ class SaleLineItem {
       'sku': sku,
       'unitPrice': unitPrice,
       'quantity': quantity,
+      'size': size,
+      'color': color,
     };
   }
 
@@ -43,6 +53,8 @@ class SaleLineItem {
       sku: map['sku'] as String,
       unitPrice: (map['unitPrice'] as num).toDouble(),
       quantity: map['quantity'] as int,
+      size: map['size'] as String? ?? '',
+      color: map['color'] as String? ?? '',
     );
   }
 }

@@ -1,10 +1,14 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
-import '../models/stock_item.dart';
+import '../models/product.dart';
+import '../services/image_storage_service.dart';
 
 /// A tappable product card used in the POS "Sell" screen to add an item
-/// to the cart. Shows how many units are already in the cart (if any) and
-/// disables itself once stock is exhausted.
+/// to the cart. Shows a product photo (or placeholder), how many units are
+/// already in the cart, and disables itself once all variants are
+/// out of stock.
 class ProductPickerTile extends StatelessWidget {
   const ProductPickerTile({
     super.key,
@@ -13,19 +17,21 @@ class ProductPickerTile extends StatelessWidget {
     required this.onTap,
   });
 
-  final StockItem item;
+  final Product item;
+
+  /// Total units of this product (across all its variants) already in cart.
   final int cartQuantity;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final remaining = item.quantity - cartQuantity;
+    final remaining = item.totalQuantity - cartQuantity;
     final outOfStock = remaining <= 0;
     final inCart = cartQuantity > 0;
 
     return Material(
-      color: outOfStock ? theme.colorScheme.surfaceContainerLow : theme.colorScheme.surfaceContainerLow,
+      color: theme.colorScheme.surfaceContainerLow,
       borderRadius: BorderRadius.circular(18),
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
@@ -40,83 +46,121 @@ class ProductPickerTile extends StatelessWidget {
           ),
           child: Opacity(
             opacity: outOfStock ? 0.55 : 1,
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildImageHeader(theme, inCart),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Text(
-                          item.name,
-                          style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                      Text(
+                        item.name,
+                        style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      if (inCart)
-                        Container(
-                          margin: const EdgeInsets.only(left: 6),
-                          width: 26,
-                          height: 26,
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.primary,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Text(
-                            '$cartQuantity',
-                            style: theme.textTheme.labelMedium?.copyWith(
-                              color: theme.colorScheme.onPrimary,
-                              fontWeight: FontWeight.bold,
+                      const SizedBox(height: 6),
+                      _chip(theme, item.category, theme.colorScheme.secondaryContainer, theme.colorScheme.onSecondaryContainer),
+                      const SizedBox(height: 8),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              '\u20b1${item.price.toStringAsFixed(2)}',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                                color: theme.colorScheme.primary,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.secondaryContainer,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Text(
-                      item.category,
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.onSecondaryContainer,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  const Spacer(),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        '\u20b1${item.price.toStringAsFixed(2)}',
-                        style: theme.textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: theme.colorScheme.primary,
-                        ),
-                      ),
-                      Text(
-                        outOfStock ? 'Out of stock' : '$remaining ${item.unit} left',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: outOfStock ? theme.colorScheme.error : theme.colorScheme.outline,
-                          fontWeight: outOfStock ? FontWeight.w600 : FontWeight.normal,
-                        ),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              outOfStock ? 'Out of stock' : '$remaining ${item.unit} left',
+                              textAlign: TextAlign.right,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: outOfStock ? theme.colorScheme.error : theme.colorScheme.outline,
+                                fontWeight: outOfStock ? FontWeight.w600 : FontWeight.normal,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _chip(ThemeData theme, String label, Color bg, Color fg) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall?.copyWith(color: fg, fontWeight: FontWeight.w600),
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
+
+  Widget _buildImageHeader(ThemeData theme, bool inCart) {
+    return ClipRRect(
+      borderRadius: const BorderRadius.only(topLeft: Radius.circular(17), topRight: Radius.circular(17)),
+      child: AspectRatio(
+        aspectRatio: 1.15,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Container(
+              color: theme.colorScheme.surfaceContainerHighest,
+              child: ImageStorageService.exists(item.imagePath)
+                  ? Image.file(
+                      File(item.imagePath!),
+                      fit: BoxFit.cover,
+                      alignment: Alignment.center,
+                      gaplessPlayback: true,
+                    )
+                  : Center(
+                      child: Icon(Icons.inventory_2_outlined, size: 34, color: theme.colorScheme.outline),
+                    ),
+            ),
+            if (inCart)
+              Positioned(
+                top: 6,
+                right: 6,
+                child: Container(
+                  width: 26,
+                  height: 26,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primary,
+                    shape: BoxShape.circle,
+                    boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+                  ),
+                  child: Text(
+                    '$cartQuantity',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.onPrimary,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );

@@ -188,7 +188,11 @@ class SalesHistoryScreenState extends State<SalesHistoryScreen> {
                               (line) => ListTile(
                                 dense: true,
                                 title: Text(line.name),
-                                subtitle: Text('SKU: ${line.sku}  •  \u20b1${line.unitPrice.toStringAsFixed(2)} x ${line.quantity}'),
+                                subtitle: Text(
+                                  'SKU: ${line.sku}'
+                                  '${line.hasVariant ? '  •  ${_variantLabel(line.size, line.color)}' : ''}'
+                                  '  •  \u20b1${line.unitPrice.toStringAsFixed(2)} x ${line.quantity}',
+                                ),
                                 trailing: Text('\u20b1${line.subtotal.toStringAsFixed(2)}'),
                               ),
                             ),
@@ -230,4 +234,9 @@ class SalesHistoryScreenState extends State<SalesHistoryScreen> {
                 ),
     );
   }
+}
+
+/// Formats a sold item's size/color snapshot for display, e.g. "M, Grey".
+String _variantLabel(String size, String color) {
+  return [size, color].where((v) => v.isNotEmpty).join(', ');
 }

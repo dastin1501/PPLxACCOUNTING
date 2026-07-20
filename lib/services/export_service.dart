@@ -6,8 +6,8 @@ import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../models/product.dart';
 import '../models/sale.dart';
-import '../models/stock_item.dart';
 
 /// Builds CSV export files for stock inventory and sales history.
 ///
@@ -20,20 +20,24 @@ class ExportService {
   static final _fileTimestamp = DateFormat('yyyyMMdd_HHmmss');
   static final _cellTimestamp = DateFormat('yyyy-MM-dd HH:mm');
 
-  static Future<File> exportStocksCsv(List<StockItem> stocks) async {
+  static Future<File> exportStocksCsv(List<Product> products) async {
     final rows = <List<dynamic>>[
-      ['Name', 'SKU', 'Category', 'Quantity', 'Unit', 'Price', 'Cost Price', 'Low Stock Alert At', 'Updated At'],
-      ...stocks.map((s) => [
-            s.name,
-            s.sku,
-            s.category,
-            s.quantity,
-            s.unit,
-            s.price,
-            s.costPrice,
-            s.lowStockThreshold,
-            _cellTimestamp.format(s.updatedAt),
-          ]),
+      ['Product Name', 'SKU', 'Category', 'Size', 'Color', 'Quantity', 'Unit', 'Price', 'Cost Price', 'Low Stock Alert At', 'Updated At'],
+      for (final product in products)
+        for (final variant in product.variants)
+          [
+            product.name,
+            variant.sku,
+            product.category,
+            variant.size,
+            variant.color,
+            variant.quantity,
+            product.unit,
+            product.price,
+            product.costPrice,
+            variant.lowStockThreshold,
+            _cellTimestamp.format(variant.updatedAt),
+          ],
     ];
     return _writeCsv('stock_export_${_fileTimestamp.format(DateTime.now())}.csv', rows);
   }
@@ -45,6 +49,8 @@ class ExportService {
         'Date',
         'Product Name',
         'SKU',
+        'Size',
+        'Color',
         'Unit Price',
         'Quantity',
         'Line Subtotal',
@@ -59,6 +65,8 @@ class ExportService {
             _cellTimestamp.format(sale.createdAt),
             line.name,
             line.sku,
+            line.size,
+            line.color,
             line.unitPrice,
             line.quantity,
             line.subtotal,
