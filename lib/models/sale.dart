@@ -77,6 +77,26 @@ enum DiscountType {
   }
 }
 
+/// How a completed sale was paid for.
+enum PaymentMethod {
+  cash,
+  online;
+
+  String get dbValue => name;
+
+  String get label => switch (this) {
+        PaymentMethod.cash => 'Cash',
+        PaymentMethod.online => 'Online',
+      };
+
+  static PaymentMethod fromDb(String? value) {
+    return PaymentMethod.values.firstWhere(
+      (m) => m.dbValue == value,
+      orElse: () => PaymentMethod.cash,
+    );
+  }
+}
+
 /// Computes the peso amount a discount removes from [subtotal], clamped so
 /// it never exceeds the subtotal (and is never negative).
 double computeDiscountAmount(double subtotal, DiscountType type, double value) {
@@ -107,6 +127,9 @@ class Sale {
   /// it never exceeds the subtotal.
   final double discountAmount;
 
+  /// How the sale was paid for (cash or online).
+  final PaymentMethod paymentMethod;
+
   const Sale({
     required this.id,
     required this.createdAt,
@@ -114,6 +137,7 @@ class Sale {
     this.discountType = DiscountType.none,
     this.discountValue = 0,
     this.discountAmount = 0,
+    this.paymentMethod = PaymentMethod.cash,
   });
 
   double get subtotal => items.fold(0, (sum, item) => sum + item.subtotal);
@@ -131,6 +155,7 @@ class Sale {
       'discountType': discountType.dbValue,
       'discountValue': discountValue,
       'discountAmount': discountAmount,
+      'paymentMethod': paymentMethod.dbValue,
     };
   }
 
@@ -142,6 +167,7 @@ class Sale {
       discountType: DiscountType.fromDb(map['discountType'] as String?),
       discountValue: (map['discountValue'] as num?)?.toDouble() ?? 0,
       discountAmount: (map['discountAmount'] as num?)?.toDouble() ?? 0,
+      paymentMethod: PaymentMethod.fromDb(map['paymentMethod'] as String?),
     );
   }
 }

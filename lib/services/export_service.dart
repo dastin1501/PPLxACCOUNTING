@@ -47,6 +47,7 @@ class ExportService {
       [
         'Sale ID',
         'Date',
+        'Payment Method',
         'Product Name',
         'SKU',
         'Size',
@@ -63,6 +64,7 @@ class ExportService {
           [
             sale.id,
             _cellTimestamp.format(sale.createdAt),
+            sale.paymentMethod.label,
             line.name,
             line.sku,
             line.size,

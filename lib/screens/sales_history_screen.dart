@@ -165,8 +165,8 @@ class SalesHistoryScreenState extends State<SalesHistoryScreen> {
                           ),
                           subtitle: Text(
                             sale.hasDiscount
-                                ? '${sale.itemCount} item(s)  •  Discount -\u20b1${sale.discountAmount.toStringAsFixed(2)}'
-                                : '${sale.itemCount} item(s)',
+                                ? '${sale.itemCount} item(s)  •  ${sale.paymentMethod.label}  •  Discount -\u20b1${sale.discountAmount.toStringAsFixed(2)}'
+                                : '${sale.itemCount} item(s)  •  ${sale.paymentMethod.label}',
                           ),
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,

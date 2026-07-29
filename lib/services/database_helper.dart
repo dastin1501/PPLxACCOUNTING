@@ -24,7 +24,7 @@ class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._internal();
 
   static const _dbName = 'pos_app.db';
-  static const _dbVersion = 5;
+  static const _dbVersion = 7;
 
   /// Legacy flat stock table (pre-variants). Only read during migration.
   static const _legacyStocksTable = 'stocks';
@@ -90,18 +90,57 @@ class DatabaseHelper {
       await _createSalesTables(db);
     }
     if (oldVersion < 3) {
-      await db.execute("ALTER TABLE $salesTable ADD COLUMN discountType TEXT NOT NULL DEFAULT 'none'");
-      await db.execute('ALTER TABLE $salesTable ADD COLUMN discountValue REAL NOT NULL DEFAULT 0');
-      await db.execute('ALTER TABLE $salesTable ADD COLUMN discountAmount REAL NOT NULL DEFAULT 0');
+      await _addColumnIfMissing(db, salesTable, 'discountType', "TEXT NOT NULL DEFAULT 'none'");
+      await _addColumnIfMissing(db, salesTable, 'discountValue', 'REAL NOT NULL DEFAULT 0');
+      await _addColumnIfMissing(db, salesTable, 'discountAmount', 'REAL NOT NULL DEFAULT 0');
     }
     if (oldVersion < 4) {
-      await db.execute("ALTER TABLE $_legacyStocksTable ADD COLUMN size TEXT NOT NULL DEFAULT ''");
-      await db.execute("ALTER TABLE $_legacyStocksTable ADD COLUMN color TEXT NOT NULL DEFAULT ''");
-      await db.execute("ALTER TABLE $saleItemsTable ADD COLUMN size TEXT NOT NULL DEFAULT ''");
-      await db.execute("ALTER TABLE $saleItemsTable ADD COLUMN color TEXT NOT NULL DEFAULT ''");
+      if (await _tableExists(db, _legacyStocksTable)) {
+        await _addColumnIfMissing(db, _legacyStocksTable, 'size', "TEXT NOT NULL DEFAULT ''");
+        await _addColumnIfMissing(db, _legacyStocksTable, 'color', "TEXT NOT NULL DEFAULT ''");
+      }
+      await _addColumnIfMissing(db, saleItemsTable, 'size', "TEXT NOT NULL DEFAULT ''");
+      await _addColumnIfMissing(db, saleItemsTable, 'color', "TEXT NOT NULL DEFAULT ''");
     }
     if (oldVersion < 5) {
       await _migrateStocksToProducts(db);
+    }
+    if (oldVersion < 6) {
+      await _addColumnIfMissing(db, salesTable, 'paymentMethod', "TEXT NOT NULL DEFAULT 'cash'");
+    }
+
+    // Defensive final pass: guarantee every column the current app code
+    // relies on actually exists, in case a database's stored version number
+    // doesn't perfectly match its real schema (e.g. from an earlier
+    // interrupted migration during development). All of these are no-ops
+    // when the column is already present.
+    await _addColumnIfMissing(db, saleItemsTable, 'size', "TEXT NOT NULL DEFAULT ''");
+    await _addColumnIfMissing(db, saleItemsTable, 'color', "TEXT NOT NULL DEFAULT ''");
+    await _addColumnIfMissing(db, salesTable, 'discountType', "TEXT NOT NULL DEFAULT 'none'");
+    await _addColumnIfMissing(db, salesTable, 'discountValue', 'REAL NOT NULL DEFAULT 0');
+    await _addColumnIfMissing(db, salesTable, 'discountAmount', 'REAL NOT NULL DEFAULT 0');
+    await _addColumnIfMissing(db, salesTable, 'paymentMethod', "TEXT NOT NULL DEFAULT 'cash'");
+  }
+
+  Future<bool> _tableExists(Database db, String table) async {
+    final rows = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+      [table],
+    );
+    return rows.isNotEmpty;
+  }
+
+  Future<bool> _columnExists(Database db, String table, String column) async {
+    final info = await db.rawQuery('PRAGMA table_info($table)');
+    return info.any((row) => row['name'] == column);
+  }
+
+  /// Adds [column] to [table] with [definition] (e.g. "TEXT NOT NULL DEFAULT
+  /// ''") only if it doesn't already exist, so upgrade steps can be re-run
+  /// safely against a database that's in an unexpected/partial state.
+  Future<void> _addColumnIfMissing(Database db, String table, String column, String definition) async {
+    if (!await _columnExists(db, table, column)) {
+      await db.execute('ALTER TABLE $table ADD COLUMN $column $definition');
     }
   }
 
@@ -114,7 +153,17 @@ class DatabaseHelper {
   /// The original `stocks` table is kept around (renamed) as a safety net
   /// rather than dropped.
   Future<void> _migrateStocksToProducts(Database db) async {
-    await _createProductTables(db);
+    if (!await _tableExists(db, _legacyStocksTable)) {
+      // Nothing to migrate (e.g. this db already went through the v5
+      // migration once before, or was created fresh past that point).
+      if (!await _tableExists(db, productsTable)) {
+        await _createProductTables(db);
+      }
+      return;
+    }
+    if (!await _tableExists(db, productsTable)) {
+      await _createProductTables(db);
+    }
 
     final legacyRows = await db.query(_legacyStocksTable, orderBy: 'name COLLATE NOCASE ASC');
     final groups = <String, List<Map<String, Object?>>>{};
@@ -167,7 +216,8 @@ class DatabaseHelper {
         createdAt TEXT NOT NULL,
         discountType TEXT NOT NULL DEFAULT 'none',
         discountValue REAL NOT NULL DEFAULT 0,
-        discountAmount REAL NOT NULL DEFAULT 0
+        discountAmount REAL NOT NULL DEFAULT 0,
+        paymentMethod TEXT NOT NULL DEFAULT 'cash'
       )
     ''');
     await db.execute('''
@@ -276,12 +326,15 @@ class DatabaseHelper {
   /// or a percentage 0-100 ([DiscountType.percent]). The resulting discount is
   /// clamped so it never makes the total negative.
   ///
+  /// [paymentMethod] records how the sale was paid for (cash or online).
+  ///
   /// Runs inside a single transaction: if any line would oversell a variant,
   /// [InsufficientStockException] is thrown and nothing is written.
   Future<Sale> recordSale(
     List<CartLine> cart, {
     DiscountType discountType = DiscountType.none,
     double discountValue = 0,
+    PaymentMethod paymentMethod = PaymentMethod.cash,
   }) async {
     if (cart.isEmpty) {
       throw ArgumentError('Cannot record a sale with an empty cart');
@@ -336,6 +389,7 @@ class DatabaseHelper {
         'discountType': discountType.dbValue,
         'discountValue': discountValue,
         'discountAmount': discountAmount,
+        'paymentMethod': paymentMethod.dbValue,
       });
       for (final line in lineItems) {
         await txn.insert(saleItemsTable, line.toMap());
@@ -351,6 +405,7 @@ class DatabaseHelper {
       discountType: discountType,
       discountValue: discountValue,
       discountAmount: discountAmount,
+      paymentMethod: paymentMethod,
     );
   }
 

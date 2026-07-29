@@ -33,6 +33,7 @@ class SellScreenState extends State<SellScreen> {
 
   DiscountType _discountType = DiscountType.none;
   final _discountCtrl = TextEditingController();
+  PaymentMethod _paymentMethod = PaymentMethod.cash;
 
   @override
   void initState() {
@@ -155,7 +156,12 @@ class SellScreenState extends State<SellScreen> {
       _cart.clear();
       _discountType = DiscountType.none;
       _discountCtrl.clear();
+      _paymentMethod = PaymentMethod.cash;
     });
+  }
+
+  void _setPaymentMethod(PaymentMethod method) {
+    setState(() => _paymentMethod = method);
   }
 
   Future<void> _checkout() async {
@@ -166,10 +172,12 @@ class SellScreenState extends State<SellScreen> {
         _cart.values.toList(),
         discountType: _discountType,
         discountValue: _discountValue,
+        paymentMethod: _paymentMethod,
       );
       _cart.clear();
       _discountType = DiscountType.none;
       _discountCtrl.clear();
+      _paymentMethod = PaymentMethod.cash;
       await _loadProducts();
       widget.onSaleCompleted();
       if (!mounted) return;
@@ -262,6 +270,19 @@ class SellScreenState extends State<SellScreen> {
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ],
+              ),
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Payment method'),
+                    Text(
+                      sale.paymentMethod.label,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -436,6 +457,31 @@ class SellScreenState extends State<SellScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          Row(
+            children: [
+              Text('Payment', style: Theme.of(context).textTheme.bodyMedium),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SegmentedButton<PaymentMethod>(
+                  segments: const [
+                    ButtonSegment(
+                      value: PaymentMethod.cash,
+                      label: Text('Cash'),
+                      icon: Icon(Icons.payments_outlined),
+                    ),
+                    ButtonSegment(
+                      value: PaymentMethod.online,
+                      label: Text('Online'),
+                      icon: Icon(Icons.qr_code_scanner_outlined),
+                    ),
+                  ],
+                  selected: {_paymentMethod},
+                  onSelectionChanged: (s) => _setPaymentMethod(s.first),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
           Row(
             children: [
               Text('Discount', style: Theme.of(context).textTheme.bodyMedium),
