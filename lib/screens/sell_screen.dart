@@ -5,6 +5,7 @@ import '../models/sale.dart';
 import '../services/database_helper.dart';
 import '../widgets/cart_line_tile.dart';
 import '../widgets/product_picker_tile.dart';
+import '../widgets/sheet_sync_button.dart';
 import '../widgets/variant_picker_sheet.dart';
 
 /// The point-of-sale "checkout" screen: pick products to build a cart, then
@@ -197,11 +198,13 @@ class SellScreenState extends State<SellScreen> {
     return showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.check_circle, color: Colors.green),
-            SizedBox(width: 8),
-            Text('Sale completed'),
+            const Icon(Icons.check_circle, color: Colors.green),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(sale.receiptNumber.isEmpty ? 'Sale completed' : sale.receiptNumber),
+            ),
           ],
         ),
         content: SizedBox(
@@ -300,7 +303,13 @@ class SellScreenState extends State<SellScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Sell')),
+      appBar: AppBar(
+        title: const Text('Sell'),
+        actions: [
+          SheetSyncButton(onSynced: () { refresh(); }),
+          const SizedBox(width: 8),
+        ],
+      ),
       body: LayoutBuilder(
         builder: (context, constraints) {
           final isWide = constraints.maxWidth >= 900;
@@ -468,6 +477,11 @@ class SellScreenState extends State<SellScreen> {
                       value: PaymentMethod.cash,
                       label: Text('Cash'),
                       icon: Icon(Icons.payments_outlined),
+                    ),
+                    ButtonSegment(
+                      value: PaymentMethod.card,
+                      label: Text('Card'),
+                      icon: Icon(Icons.credit_card_outlined),
                     ),
                     ButtonSegment(
                       value: PaymentMethod.online,

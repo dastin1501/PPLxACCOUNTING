@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../services/sheet_sync_service.dart';
 import 'home_screen.dart';
+import 'returns_screen.dart';
 import 'sales_history_screen.dart';
 import 'sell_screen.dart';
 
@@ -23,15 +25,27 @@ class _AppShellState extends State<AppShell> {
   final _sellKey = GlobalKey<SellScreenState>();
   final _inventoryKey = GlobalKey<HomeScreenState>();
   final _salesHistoryKey = GlobalKey<SalesHistoryScreenState>();
+  final _returnsKey = GlobalKey<ReturnsScreenState>();
 
   void _onSaleCompleted() {
     _inventoryKey.currentState?.refresh();
     _salesHistoryKey.currentState?.refresh();
+    _backgroundSync();
+  }
+
+  /// Uploads anything still waiting, when a sheet is configured. Failures
+  /// stay queued for the next attempt and do not interrupt a sale.
+  Future<void> _backgroundSync() async {
+    final result = await SheetSyncService.instance.syncIfConfigured();
+    if (!mounted || result == null || !result.ok || result.importedVariants == 0) return;
+    _inventoryKey.currentState?.refresh();
+    _sellKey.currentState?.refresh();
   }
 
   void _onSaleDeleted() {
     _inventoryKey.currentState?.refresh();
     _sellKey.currentState?.refresh();
+    _returnsKey.currentState?.refresh();
   }
 
   void _onDestinationSelected(int index) {
@@ -45,6 +59,9 @@ class _AppShellState extends State<AppShell> {
         _inventoryKey.currentState?.refresh();
       case 2:
         _salesHistoryKey.currentState?.refresh();
+        _backgroundSync();
+      case 3:
+        _returnsKey.currentState?.refresh();
     }
   }
 
@@ -54,12 +71,14 @@ class _AppShellState extends State<AppShell> {
       SellScreen(key: _sellKey, onSaleCompleted: _onSaleCompleted),
       HomeScreen(key: _inventoryKey),
       SalesHistoryScreen(key: _salesHistoryKey, onSaleDeleted: _onSaleDeleted),
+      ReturnsScreen(key: _returnsKey),
     ];
 
     const destinations = [
       (icon: Icons.point_of_sale_outlined, selectedIcon: Icons.point_of_sale, label: 'Sell'),
       (icon: Icons.inventory_2_outlined, selectedIcon: Icons.inventory_2, label: 'Inventory'),
       (icon: Icons.receipt_long_outlined, selectedIcon: Icons.receipt_long, label: 'Sales'),
+      (icon: Icons.undo_outlined, selectedIcon: Icons.undo, label: 'Returns'),
     ];
 
     return LayoutBuilder(

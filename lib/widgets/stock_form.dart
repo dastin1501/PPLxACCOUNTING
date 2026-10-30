@@ -11,6 +11,33 @@ import '../utils/color_names.dart';
 
 const _sizePresets = ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL'];
 
+/// Next SKU that does not collide with [taken]. Continues a plain number
+/// series (`001`, `002`) when that is what the shop already uses, otherwise
+/// `SKU-0001`.
+String suggestNextSku(Iterable<String> taken) {
+  final values = taken.map((sku) => sku.trim()).where((sku) => sku.isNotEmpty);
+  final numeric = RegExp(r'^(\d+)$');
+  final prefixed = RegExp(r'^SKU-(\d+)$', caseSensitive: false);
+  var max = 0;
+  var width = 4;
+  var numericCount = 0;
+  var prefixedCount = 0;
+  for (final sku in values) {
+    final asNumber = numeric.firstMatch(sku);
+    final asPrefixed = prefixed.firstMatch(sku);
+    final match = asNumber ?? asPrefixed;
+    if (match == null) continue;
+    if (asNumber != null) numericCount++;
+    if (asPrefixed != null) prefixedCount++;
+    final number = int.parse(match.group(1)!);
+    if (number > max) max = number;
+    if (match.group(1)!.length > width) width = match.group(1)!.length;
+  }
+  final digits = (max + 1).toString().padLeft(width, '0');
+  if (numericCount > 0 && prefixedCount == 0) return digits;
+  return 'SKU-$digits';
+}
+
 /// Form for creating a new [Product] (with its variants) or editing an
 /// existing one.
 ///
@@ -22,6 +49,7 @@ class StockForm extends StatefulWidget {
     required this.onSubmit,
     required this.onCancel,
     required this.skuValidator,
+    this.existingSkus = const [],
   });
 
   final Product? initial;
@@ -31,6 +59,9 @@ class StockForm extends StatefulWidget {
   /// Returns an error string if [sku] is already used by another variant
   /// (other than [excludingVariantId]), otherwise null.
   final String? Function(String sku, String excludingVariantId) skuValidator;
+
+  /// SKUs already saved on other products, so a new row can continue the series.
+  final List<String> existingSkus;
 
   @override
   State<StockForm> createState() => _StockFormState();
@@ -103,9 +134,20 @@ class _StockFormState extends State<StockForm> {
     _priceCtrl = TextEditingController(text: product?.price.toString() ?? '');
     _costPriceCtrl = TextEditingController(text: product?.costPrice.toString() ?? '');
     _imagePath = product?.imagePath;
-    _variantRows = product == null || product.variants.isEmpty
-        ? [_VariantRow.blank()]
-        : product.variants.map(_VariantRow.fromVariant).toList();
+    if (product == null || product.variants.isEmpty) {
+      final row = _VariantRow.blank();
+      row.skuCtrl.text = suggestNextSku(widget.existingSkus);
+      _variantRows = [row];
+    } else {
+      _variantRows = product.variants.map(_VariantRow.fromVariant).toList();
+    }
+  }
+
+  String _nextSku() {
+    return suggestNextSku([
+      ...widget.existingSkus,
+      ..._variantRows.map((row) => row.skuCtrl.text),
+    ]);
   }
 
   // Note: switching between "add new" and "edit <product>" (or between two
@@ -130,13 +172,17 @@ class _StockFormState extends State<StockForm> {
   }
 
   void _addVariantRow() {
-    setState(() => _variantRows.add(_VariantRow.blank()));
+    final row = _VariantRow.blank();
+    row.skuCtrl.text = _nextSku();
+    setState(() => _variantRows.add(row));
   }
 
   void _addPresetSizeRow(String size) {
     final alreadyPresent = _variantRows.any((r) => r.sizeCtrl.text.trim().toLowerCase() == size.toLowerCase());
     if (alreadyPresent) return;
-    setState(() => _variantRows.add(_VariantRow(id: const Uuid().v4(), size: size)));
+    final row = _VariantRow(id: const Uuid().v4(), size: size);
+    row.skuCtrl.text = _nextSku();
+    setState(() => _variantRows.add(row));
   }
 
   void _removeVariantRow(_VariantRow row) {

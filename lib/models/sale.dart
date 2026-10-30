@@ -80,12 +80,14 @@ enum DiscountType {
 /// How a completed sale was paid for.
 enum PaymentMethod {
   cash,
+  card,
   online;
 
   String get dbValue => name;
 
   String get label => switch (this) {
         PaymentMethod.cash => 'Cash',
+        PaymentMethod.card => 'Card',
         PaymentMethod.online => 'Online',
       };
 
@@ -113,6 +115,10 @@ double computeDiscountAmount(double subtotal, DiscountType type, double value) {
 /// with an optional discount applied at checkout.
 class Sale {
   final String id;
+
+  /// Short number printed on the receipt, e.g. `S-0001`. The [id] stays a
+  /// UUID so older records and sheet sync keep a stable key.
+  final String receiptNumber;
   final DateTime createdAt;
   final List<SaleLineItem> items;
 
@@ -134,6 +140,7 @@ class Sale {
     required this.id,
     required this.createdAt,
     required this.items,
+    this.receiptNumber = '',
     this.discountType = DiscountType.none,
     this.discountValue = 0,
     this.discountAmount = 0,
@@ -151,6 +158,7 @@ class Sale {
   Map<String, Object?> toMap() {
     return {
       'id': id,
+      'receiptNumber': receiptNumber,
       'createdAt': createdAt.toIso8601String(),
       'discountType': discountType.dbValue,
       'discountValue': discountValue,
@@ -162,6 +170,7 @@ class Sale {
   factory Sale.fromMap(Map<String, Object?> map, List<SaleLineItem> items) {
     return Sale(
       id: map['id'] as String,
+      receiptNumber: map['receiptNumber'] as String? ?? '',
       createdAt: DateTime.parse(map['createdAt'] as String),
       items: items,
       discountType: DiscountType.fromDb(map['discountType'] as String?),

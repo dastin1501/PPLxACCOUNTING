@@ -5,6 +5,7 @@ import '../services/database_helper.dart';
 import '../services/export_service.dart';
 import '../services/file_share_helper.dart';
 import '../services/image_storage_service.dart';
+import '../widgets/sheet_sync_button.dart';
 import '../widgets/stock_form.dart';
 import '../widgets/stock_list_tile.dart';
 
@@ -149,6 +150,7 @@ class HomeScreenState extends State<HomeScreen> {
                 backgroundColor: Theme.of(context).colorScheme.errorContainer,
               ),
             ),
+          SheetSyncButton(onSynced: () { refresh(); }),
           IconButton(
             icon: _exporting
                 ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
@@ -173,6 +175,7 @@ class HomeScreenState extends State<HomeScreen> {
                     onSubmit: _saveProduct,
                     onCancel: _closeForm,
                     skuValidator: _validateSku,
+                    existingSkus: _existingSkus,
                   )
                 : listPane;
           }
@@ -192,6 +195,7 @@ class HomeScreenState extends State<HomeScreen> {
                           onSubmit: _saveProduct,
                           onCancel: _closeForm,
                           skuValidator: _validateSku,
+                          existingSkus: _existingSkus,
                         )
                       : _buildEmptyDetail(),
                 ),
@@ -223,6 +227,11 @@ class HomeScreenState extends State<HomeScreen> {
       if (mounted) setState(() => _exporting = false);
     }
   }
+
+  List<String> get _existingSkus => [
+        for (final product in _products)
+          for (final variant in product.variants) variant.sku,
+      ];
 
   /// Returns an error string if [sku] is already used by another variant
   /// (other than [excludingVariantId]) across any product, otherwise null.
