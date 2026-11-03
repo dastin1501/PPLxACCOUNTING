@@ -61,28 +61,32 @@ class ExportService {
         'Unit Price',
         'Quantity',
         'Line Subtotal',
+        'Item Discount',
         'Sale Subtotal',
         'Discount',
         'Sale Total',
       ],
       for (final sale in sales) ...[
-        for (final line in sale.items)
+        for (var i = 0; i < sale.items.length; i++)
           [
             sale.id,
             sale.receiptNumber,
             _cellTimestamp.format(sale.createdAt),
             sale.paymentMethod.label,
             'Sale',
-            line.name,
-            line.sku,
-            line.size,
-            line.color,
-            line.unitPrice,
-            line.quantity,
-            line.subtotal,
-            sale.subtotal,
-            sale.discountAmount,
-            sale.total,
+            sale.items[i].name,
+            sale.items[i].sku,
+            sale.items[i].size,
+            sale.items[i].color,
+            sale.items[i].unitPrice,
+            sale.items[i].quantity,
+            sale.items[i].subtotal,
+            sale.items[i].discountAmount,
+            // Sale money is written once. Repeating it on every item makes
+            // Excel add the same payment again for the pin and the towel.
+            if (i == 0) sale.subtotal else '',
+            if (i == 0) sale.discountAmount else '',
+            if (i == 0) sale.total else '',
           ],
         for (final adjustment in adjustments[sale.id] ?? const <StockAdjustment>[])
           for (final line in adjustment.lines)
@@ -101,6 +105,7 @@ class ExportService {
               line.unitPrice,
               line.direction == AdjustmentDirection.inbound ? -line.quantity : line.quantity,
               line.direction == AdjustmentDirection.inbound ? -line.subtotal : line.subtotal,
+              '',
               '',
               '',
               '',
@@ -128,20 +133,24 @@ class ExportService {
         'Refund',
       ],
       for (final record in records)
-        for (final line in record.adjustment.lines)
+        for (var i = 0; i < record.adjustment.lines.length; i++)
           [
             _cellTimestamp.format(record.adjustment.createdAt),
             record.adjustment.isExchange ? 'Exchange' : 'Return',
             record.sale?.receiptNumber ?? '',
             record.adjustment.saleId,
-            line.name,
-            line.sku,
-            line.size,
-            line.color,
-            line.direction == AdjustmentDirection.inbound ? 'Returned' : 'Given',
-            line.direction == AdjustmentDirection.inbound ? -line.quantity : line.quantity,
-            line.direction == AdjustmentDirection.inbound ? -line.subtotal : line.subtotal,
-            record.adjustment.refundAmount,
+            record.adjustment.lines[i].name,
+            record.adjustment.lines[i].sku,
+            record.adjustment.lines[i].size,
+            record.adjustment.lines[i].color,
+            record.adjustment.lines[i].direction == AdjustmentDirection.inbound ? 'Returned' : 'Given',
+            record.adjustment.lines[i].direction == AdjustmentDirection.inbound
+                ? -record.adjustment.lines[i].quantity
+                : record.adjustment.lines[i].quantity,
+            record.adjustment.lines[i].direction == AdjustmentDirection.inbound
+                ? -record.adjustment.lines[i].subtotal
+                : record.adjustment.lines[i].subtotal,
+            if (i == 0) record.adjustment.refundAmount else '',
           ],
     ];
     return _writeCsv('returns_export_${_fileTimestamp.format(DateTime.now())}.csv', rows);

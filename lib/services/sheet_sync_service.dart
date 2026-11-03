@@ -284,17 +284,21 @@ class SheetSyncService {
       'subtotal': sale.subtotal,
       'total': sale.total,
       'lines': [
-        for (final line in sale.items)
+        for (var i = 0; i < sale.items.length; i++)
           {
-            'id': line.id,
-            'variantId': line.stockId,
-            'name': line.name,
-            'sku': line.sku,
-            'size': line.size,
-            'color': line.color,
-            'unitPrice': line.unitPrice,
-            'quantity': line.quantity,
-            'lineSubtotal': line.subtotal,
+            'id': sale.items[i].id,
+            'variantId': sale.items[i].stockId,
+            'name': sale.items[i].name,
+            'sku': sale.items[i].sku,
+            'size': sale.items[i].size,
+            'color': sale.items[i].color,
+            'unitPrice': sale.items[i].unitPrice,
+            'quantity': sale.items[i].quantity,
+            'lineSubtotal': sale.items[i].subtotal,
+            'itemDiscountType': sale.items[i].discountType.dbValue,
+            'itemDiscountValue': sale.items[i].discountValue,
+            'itemDiscount': sale.items[i].discountAmount,
+            'includeSaleTotals': i == 0,
           },
       ],
     };

@@ -1,5 +1,7 @@
 import 'package:uuid/uuid.dart';
 
+import 'sale.dart';
+
 /// A specific sellable size/color combination under a [Product], with its
 /// own SKU, quantity, and low-stock threshold. A product with no real
 /// variations still has exactly one variant, with blank [size]/[color].
@@ -185,13 +187,39 @@ class CartLine {
   final ProductVariant variant;
   final int quantity;
 
-  const CartLine({required this.product, required this.variant, required this.quantity});
+  /// Discount for this line only. [DiscountType.none] leaves the line at full price.
+  final DiscountType discountType;
+  final double discountValue;
+
+  const CartLine({
+    required this.product,
+    required this.variant,
+    required this.quantity,
+    this.discountType = DiscountType.none,
+    this.discountValue = 0,
+  });
 
   double get unitPrice => product.price;
 
   double get subtotal => unitPrice * quantity;
 
-  CartLine copyWith({int? quantity}) {
-    return CartLine(product: product, variant: variant, quantity: quantity ?? this.quantity);
+  double get discountAmount => computeDiscountAmount(subtotal, discountType, discountValue);
+
+  double get net => subtotal - discountAmount;
+
+  CartLine copyWith({
+    Product? product,
+    ProductVariant? variant,
+    int? quantity,
+    DiscountType? discountType,
+    double? discountValue,
+  }) {
+    return CartLine(
+      product: product ?? this.product,
+      variant: variant ?? this.variant,
+      quantity: quantity ?? this.quantity,
+      discountType: discountType ?? this.discountType,
+      discountValue: discountValue ?? this.discountValue,
+    );
   }
 }

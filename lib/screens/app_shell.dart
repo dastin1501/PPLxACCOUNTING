@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../services/sheet_sync_service.dart';
+import '../theme/app_theme.dart';
+import '../theme/theme_controller.dart';
 import 'home_screen.dart';
 import 'returns_screen.dart';
 import 'sales_history_screen.dart';
@@ -95,31 +97,17 @@ class _AppShellState extends State<AppShell> {
                   onDestinationSelected: _onDestinationSelected,
                   labelType: NavigationRailLabelType.all,
                   minWidth: 84,
-                  leading: Padding(
-                    padding: const EdgeInsets.only(top: 8, bottom: 24),
-                    child: Column(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.primaryContainer,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Icon(
-                            Icons.storefront,
-                            size: 26,
-                            color: Theme.of(context).colorScheme.onPrimaryContainer,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'POS',
-                          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0.5,
-                              ),
-                        ),
-                      ],
+                  leading: const Padding(
+                    padding: EdgeInsets.only(top: 12, bottom: 20),
+                    child: _ShopMark(),
+                  ),
+                  trailing: const Expanded(
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: Padding(
+                        padding: EdgeInsets.only(bottom: 12),
+                        child: _ThemeToggle(),
+                      ),
                     ),
                   ),
                   destinations: destinations
@@ -132,7 +120,7 @@ class _AppShellState extends State<AppShell> {
                       )
                       .toList(),
                 ),
-                const VerticalDivider(width: 1),
+                VerticalDivider(width: 1, color: Theme.of(context).colorScheme.outlineVariant),
                 Expanded(child: body),
               ],
             ),
@@ -141,21 +129,74 @@ class _AppShellState extends State<AppShell> {
 
         return Scaffold(
           body: body,
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: _index,
-            onDestinationSelected: _onDestinationSelected,
-            destinations: destinations
-                .map(
-                  (d) => NavigationDestination(
-                    icon: Icon(d.icon),
-                    selectedIcon: Icon(d.selectedIcon),
-                    label: d.label,
-                  ),
-                )
-                .toList(),
+          bottomNavigationBar: Row(
+            children: [
+              Expanded(
+                child: NavigationBar(
+                  selectedIndex: _index,
+                  onDestinationSelected: _onDestinationSelected,
+                  destinations: destinations
+                      .map(
+                        (d) => NavigationDestination(
+                          icon: Icon(d.icon),
+                          selectedIcon: Icon(d.selectedIcon),
+                          label: d.label,
+                        ),
+                      )
+                      .toList(),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.only(right: 4),
+                child: _ThemeToggle(),
+              ),
+            ],
           ),
         );
       },
+    );
+  }
+}
+
+/// Small wordmark at the top of the side rail.
+class _ShopMark extends StatelessWidget {
+  const _ShopMark();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 52,
+      height: 52,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: AppTheme.pplGreen,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: const Text(
+        'PPL',
+        style: TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w800,
+          fontSize: 13,
+          letterSpacing: 0.6,
+        ),
+      ),
+    );
+  }
+}
+
+class _ThemeToggle extends StatelessWidget {
+  const _ThemeToggle();
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final onRail = MediaQuery.sizeOf(context).width >= 900;
+    return IconButton(
+      tooltip: dark ? 'Light mode' : 'Dark mode',
+      color: onRail ? const Color(0xFFF5F5F5) : Theme.of(context).colorScheme.onSurface,
+      onPressed: ThemeController.instance.toggle,
+      icon: Icon(dark ? Icons.light_mode_outlined : Icons.dark_mode_outlined),
     );
   }
 }

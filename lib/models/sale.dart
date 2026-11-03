@@ -14,6 +14,14 @@ class SaleLineItem {
   final String size;
   final String color;
 
+  /// Discount that applies to this line only. A towel can be reduced while
+  /// the shirt on the same receipt stays at full price.
+  final DiscountType discountType;
+  final double discountValue;
+
+  /// Peso amount taken off this line, already clamped to the line subtotal.
+  final double discountAmount;
+
   const SaleLineItem({
     required this.id,
     required this.saleId,
@@ -24,9 +32,20 @@ class SaleLineItem {
     required this.quantity,
     this.size = '',
     this.color = '',
+    this.discountType = DiscountType.none,
+    this.discountValue = 0,
+    this.discountAmount = 0,
   });
 
   double get subtotal => unitPrice * quantity;
+
+  /// What the customer paid for this line after its own discount.
+  double get net => subtotal - discountAmount;
+
+  /// Per-unit amount actually paid, used when a discounted item is returned.
+  double get netUnitPrice => quantity <= 0 ? unitPrice : net / quantity;
+
+  bool get hasDiscount => discountType != DiscountType.none && discountAmount > 0;
 
   bool get hasVariant => size.isNotEmpty || color.isNotEmpty;
 
@@ -41,6 +60,9 @@ class SaleLineItem {
       'quantity': quantity,
       'size': size,
       'color': color,
+      'discountType': discountType.dbValue,
+      'discountValue': discountValue,
+      'discountAmount': discountAmount,
     };
   }
 
@@ -55,6 +77,9 @@ class SaleLineItem {
       quantity: map['quantity'] as int,
       size: map['size'] as String? ?? '',
       color: map['color'] as String? ?? '',
+      discountType: DiscountType.fromDb(map['discountType'] as String?),
+      discountValue: (map['discountValue'] as num?)?.toDouble() ?? 0,
+      discountAmount: (map['discountAmount'] as num?)?.toDouble() ?? 0,
     );
   }
 }
@@ -149,9 +174,17 @@ class Sale {
 
   double get subtotal => items.fold(0, (sum, item) => sum + item.subtotal);
 
-  double get total => subtotal - discountAmount;
+  /// Discounts that were applied to individual lines, not the whole receipt.
+  double get itemDiscountAmount => items.fold(0, (sum, item) => sum + item.discountAmount);
+
+  double get total {
+    final net = subtotal - itemDiscountAmount - discountAmount;
+    return net < 0 ? 0 : net;
+  }
 
   bool get hasDiscount => discountType != DiscountType.none && discountAmount > 0;
+
+  bool get hasItemDiscount => itemDiscountAmount > 0;
 
   int get itemCount => items.fold(0, (sum, item) => sum + item.quantity);
 

@@ -30,8 +30,19 @@ class ProductPickerTile extends StatelessWidget {
     final outOfStock = remaining <= 0;
     final inCart = cartQuantity > 0;
 
-    return Material(
-      color: theme.colorScheme.surfaceContainerLow,
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: theme.colorScheme.shadow.withValues(alpha: 0.06),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Material(
+      color: theme.colorScheme.surfaceContainerLowest,
       borderRadius: BorderRadius.circular(18),
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
@@ -101,6 +112,7 @@ class ProductPickerTile extends StatelessWidget {
             ),
           ),
         ),
+      ),
       ),
     );
   }

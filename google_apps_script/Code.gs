@@ -29,7 +29,8 @@ var PRODUCT_HEADERS = [
 ];
 var SALE_HEADERS = [
   'Line ID', 'Sale ID', 'Receipt Number', 'Date', 'Payment Method', 'Name', 'SKU', 'Size', 'Color',
-  'Variant ID', 'Unit Price', 'Quantity', 'Line Subtotal', 'Discount Type',
+  'Variant ID', 'Unit Price', 'Quantity', 'Line Subtotal', 'Item Discount Type',
+  'Item Discount Value', 'Item Discount', 'Discount Type',
   'Discount Value', 'Discount Amount', 'Sale Subtotal', 'Sale Total'
 ];
 var MOVEMENT_HEADERS = [
@@ -200,6 +201,27 @@ function sheetSaleId(sale) {
 
 function upsertSales(sales) {
   var sheet = SpreadsheetApp.getActive().getSheetByName(SALES);
+function saleTotalCells(sale, line) {
+  if (line.includeSaleTotals === false) {
+    return {
+      'Discount Type': '',
+      'Discount Value': '',
+      'Discount Amount': '',
+      'Sale Subtotal': '',
+      'Sale Total': ''
+    };
+  }
+  return {
+    'Discount Type': sale.discountType || '',
+    'Discount Value': sale.discountValue || 0,
+    'Discount Amount': sale.discountAmount || 0,
+    'Sale Subtotal': sale.subtotal || 0,
+    'Sale Total': sale.total || 0
+  };
+}
+
+function upsertSales(sales) {
+  var sheet = SpreadsheetApp.getActive().getSheetByName(SALES);
   var found = rowIndex(sheet, 'Line ID');
   var accepted = [];
   sales.forEach(function (sale) {
@@ -207,15 +229,21 @@ function upsertSales(sales) {
     (sale.lines || []).forEach(function (line) {
       var id = String(line.id || '').trim();
       if (!id) return;
+      var totals = saleTotalCells(sale, line);
       if (found.index[id]) {
-        writeByHeaders(sheet, found.index[id], found.map, {
+        var patch = {
           'Sale ID': saleId,
           'Receipt Number': sale.receiptNumber || '',
-          'SKU': line.sku || ''
-        });
+          'SKU': line.sku || '',
+          'Item Discount Type': line.itemDiscountType || 'none',
+          'Item Discount Value': line.itemDiscountValue || 0,
+          'Item Discount': line.itemDiscount || 0
+        };
+        Object.keys(totals).forEach(function (header) { patch[header] = totals[header]; });
+        writeByHeaders(sheet, found.index[id], found.map, patch);
         return;
       }
-      writeByHeaders(sheet, null, found.map, {
+      var row = {
         'Line ID': id,
         'Sale ID': saleId,
         'Receipt Number': sale.receiptNumber || '',
@@ -229,14 +257,12 @@ function upsertSales(sales) {
         'Unit Price': line.unitPrice || 0,
         'Quantity': line.quantity || 0,
         'Line Subtotal': line.lineSubtotal || 0,
-        'Discount Type': sale.discountType || '',
-        'Discount Value': sale.discountValue || 0,
-        'Discount Amount': sale.discountAmount || 0,
-        'Sale Subtotal': sale.subtotal || 0,
-        'Sale Total': sale.total || 0
-      });
-      found.index[id] = sheet.getLastRow();
-    });
+        'Item Discount Type': line.itemDiscountType || 'none',
+        'Item Discount Value': line.itemDiscountValue || 0,
+        'Item Discount': line.itemDiscount || 0
+      };
+      Object.keys(totals).forEach(function (header) { row[header] = totals[header]; });
+      writeByHeaders(sheet, null, found.map, row);
     if (sale.id) accepted.push(sale.id);
   });
   return accepted;

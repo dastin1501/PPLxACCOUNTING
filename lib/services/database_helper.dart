@@ -38,7 +38,7 @@ class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._internal();
 
   static const _dbName = 'pos_app.db';
-  static const _dbVersion = 10;
+  static const _dbVersion = 11;
 
   /// Legacy flat stock table (pre-variants). Only read during migration.
   static const _legacyStocksTable = 'stocks';
@@ -139,6 +139,9 @@ class DatabaseHelper {
     await _addColumnIfMissing(db, salesTable, 'discountValue', 'REAL NOT NULL DEFAULT 0');
     await _addColumnIfMissing(db, salesTable, 'discountAmount', 'REAL NOT NULL DEFAULT 0');
     await _addColumnIfMissing(db, salesTable, 'paymentMethod', "TEXT NOT NULL DEFAULT 'cash'");
+    await _addColumnIfMissing(db, saleItemsTable, 'discountType', "TEXT NOT NULL DEFAULT 'none'");
+    await _addColumnIfMissing(db, saleItemsTable, 'discountValue', 'REAL NOT NULL DEFAULT 0');
+    await _addColumnIfMissing(db, saleItemsTable, 'discountAmount', 'REAL NOT NULL DEFAULT 0');
 
     // Returns and size exchanges. IF NOT EXISTS so this also heals a
     // database whose version number got ahead of its real tables.
@@ -449,10 +452,11 @@ class DatabaseHelper {
   /// An optional discount can be applied to the cart's subtotal: pass
   /// [discountType]/[discountValue] as a flat peso amount ([DiscountType.fixed])
   /// or a percentage 0-100 ([DiscountType.percent]). The resulting discount is
-  /// clamped so it never makes the total negative.
-  ///
-  /// [paymentMethod] records how the sale was paid for (cash or online).
-  ///
+  /// Each cart line can carry its own discount. [discountType]/[discountValue]
+  /// is an extra discount on whatever is left after those line discounts,
+  /// as a flat peso amount ([DiscountType.fixed]) or a percentage 0-100
+  /// ([DiscountType.percent]). The result is clamped so the total stays
+  /// at zero or above.
   /// Runs inside a single transaction: if any line would oversell a variant,
   /// [InsufficientStockException] is thrown and nothing is written.
   Future<Sale> recordSale(
@@ -494,6 +498,7 @@ class DatabaseHelper {
           whereArgs: [current.id],
         );
 
+        final lineSubtotal = cartLine.product.price * cartLine.quantity;
         lineItems.add(SaleLineItem(
           id: const Uuid().v4(),
           saleId: saleId,
@@ -504,11 +509,15 @@ class DatabaseHelper {
           quantity: cartLine.quantity,
           size: current.size,
           color: current.color,
+          discountType: cartLine.discountType,
+          discountValue: cartLine.discountValue,
+          discountAmount: computeDiscountAmount(lineSubtotal, cartLine.discountType, cartLine.discountValue),
         ));
       }
 
       final subtotal = lineItems.fold<double>(0, (sum, line) => sum + line.subtotal);
-      final discountAmount = computeDiscountAmount(subtotal, discountType, discountValue);
+      final itemDiscount = lineItems.fold<double>(0, (sum, line) => sum + line.discountAmount);
+      final discountAmount = computeDiscountAmount(subtotal - itemDiscount, discountType, discountValue);
 
       await txn.insert(salesTable, {
         'id': saleId,
@@ -525,7 +534,8 @@ class DatabaseHelper {
     });
 
     final subtotal = lineItems.fold<double>(0, (sum, line) => sum + line.subtotal);
-    final discountAmount = computeDiscountAmount(subtotal, discountType, discountValue);
+    final itemDiscount = lineItems.fold<double>(0, (sum, line) => sum + line.discountAmount);
+    final discountAmount = computeDiscountAmount(subtotal - itemDiscount, discountType, discountValue);
     return Sale(
       id: saleId,
       createdAt: createdAt,
@@ -615,7 +625,7 @@ class DatabaseHelper {
           color: sold.color,
           quantity: request.quantity,
           direction: AdjustmentDirection.inbound,
-          unitPrice: sold.unitPrice,
+          unitPrice: sold.netUnitPrice,
         ));
 
         final replacement = request.exchangeTo;

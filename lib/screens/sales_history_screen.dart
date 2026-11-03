@@ -75,8 +75,11 @@ class SalesHistoryScreenState extends State<SalesHistoryScreen> {
       '${sale.itemCount} item(s)',
       sale.paymentMethod.label,
     ];
+    if (sale.hasItemDiscount) {
+      parts.add('Item discount -\u20b1${sale.itemDiscountAmount.toStringAsFixed(2)}');
+    }
     if (sale.hasDiscount) {
-      parts.add('Discount -\u20b1${sale.discountAmount.toStringAsFixed(2)}');
+      parts.add('Whole sale -\u20b1${sale.discountAmount.toStringAsFixed(2)}');
     }
     return parts.join('  •  ');
   }
@@ -356,13 +359,14 @@ class SalesHistoryScreenState extends State<SalesHistoryScreen> {
                                     'SKU: ${line.sku}'
                                     '${line.hasVariant ? '  •  ${_variantLabel(line.size, line.color)}' : ''}'
                                     '  •  \u20b1${line.unitPrice.toStringAsFixed(2)} x ${line.quantity}'
+                                    '${line.hasDiscount ? '  •  Discount -\u20b1${line.discountAmount.toStringAsFixed(2)}' : ''}'
                                     '${returned > 0 ? '  •  $returned returned' : ''}',
                                   ),
-                                  trailing: Text('\u20b1${line.subtotal.toStringAsFixed(2)}'),
+                                  trailing: Text('\u20b1${line.net.toStringAsFixed(2)}'),
                                 );
                               },
                             ),
-                            if (sale.hasDiscount || refunded > 0) ...[
+                            if (sale.hasDiscount || sale.hasItemDiscount || refunded > 0) ...[
                               const Divider(height: 1),
                               Padding(
                                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -374,6 +378,20 @@ class SalesHistoryScreenState extends State<SalesHistoryScreen> {
                                   ],
                                 ),
                               ),
+                              if (sale.hasItemDiscount)
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      const Text('Item discount'),
+                                      Text(
+                                        '-\u20b1${sale.itemDiscountAmount.toStringAsFixed(2)}',
+                                        style: TextStyle(color: Theme.of(context).colorScheme.error),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               if (sale.hasDiscount)
                                 Padding(
                                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
@@ -382,8 +400,8 @@ class SalesHistoryScreenState extends State<SalesHistoryScreen> {
                                     children: [
                                       Text(
                                         sale.discountType == DiscountType.percent
-                                            ? 'Discount (${sale.discountValue.toStringAsFixed(0)}%)'
-                                            : 'Discount',
+                                            ? 'Whole sale (${sale.discountValue.toStringAsFixed(0)}%)'
+                                            : 'Whole sale',
                                       ),
                                       Text(
                                         '-\u20b1${sale.discountAmount.toStringAsFixed(2)}',

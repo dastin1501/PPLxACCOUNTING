@@ -34,6 +34,7 @@ class SellScreenState extends State<SellScreen> {
 
   DiscountType _discountType = DiscountType.none;
   final _discountCtrl = TextEditingController();
+  final Map<String, TextEditingController> _lineDiscountCtrls = {};
   PaymentMethod _paymentMethod = PaymentMethod.cash;
 
   @override
@@ -46,7 +47,33 @@ class SellScreenState extends State<SellScreen> {
   @override
   void dispose() {
     _discountCtrl.dispose();
+    for (final controller in _lineDiscountCtrls.values) {
+      controller.dispose();
+    }
     super.dispose();
+  }
+
+  TextEditingController _lineDiscountCtrl(String variantId) {
+    return _lineDiscountCtrls.putIfAbsent(variantId, () {
+      final controller = TextEditingController();
+      controller.addListener(() => _applyLineDiscountValue(variantId));
+      return controller;
+    });
+  }
+
+  void _applyLineDiscountValue(String variantId) {
+    final line = _cart[variantId];
+    final controller = _lineDiscountCtrls[variantId];
+    if (line == null || controller == null || !mounted) return;
+    final value = double.tryParse(controller.text.trim()) ?? 0;
+    if (line.discountValue == value) return;
+    setState(() => _cart[variantId] = line.copyWith(discountValue: value));
+  }
+
+  void _clearLineDiscount(String variantId) {
+    final controller = _lineDiscountCtrls.remove(variantId);
+    if (controller == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) => controller.dispose());
   }
 
   /// Reloads product data from the database. Called externally (e.g. by the
@@ -57,13 +84,11 @@ class SellScreenState extends State<SellScreen> {
   Future<void> _loadProducts() async {
     setState(() => _loading = true);
     final products = await _db.getAllProducts();
+    if (!mounted) return;
     setState(() {
       _products = products;
       _loading = false;
 
-      // Re-sync any existing cart lines against fresh product/variant data,
-      // dropping lines whose product/variant no longer exists and clamping
-      // quantities that now exceed what's on hand.
       final updated = <String, CartLine>{};
       for (final entry in _cart.entries) {
         final product = _products.where((p) => p.id == entry.value.product.id).firstOrNull;
@@ -72,7 +97,7 @@ class SellScreenState extends State<SellScreen> {
         if (variant == null) continue;
         final qty = entry.value.quantity.clamp(0, variant.quantity);
         if (qty <= 0) continue;
-        updated[entry.key] = CartLine(product: product, variant: variant, quantity: qty);
+        updated[entry.key] = entry.value.copyWith(product: product, variant: variant, quantity: qty);
       }
       _cart
         ..clear()
@@ -93,11 +118,19 @@ class SellScreenState extends State<SellScreen> {
 
   double get _cartSubtotal => _cart.values.fold(0.0, (sum, line) => sum + line.subtotal);
 
+  double get _itemDiscountAmount => _cart.values.fold(0.0, (sum, line) => sum + line.discountAmount);
+
   double get _discountValue => double.tryParse(_discountCtrl.text.trim()) ?? 0;
 
-  double get _discountAmount => computeDiscountAmount(_cartSubtotal, _discountType, _discountValue);
+  double get _discountAmount {
+    final remaining = _cartSubtotal - _itemDiscountAmount;
+    return computeDiscountAmount(remaining < 0 ? 0 : remaining, _discountType, _discountValue);
+  }
 
-  double get _cartTotal => _cartSubtotal - _discountAmount;
+  double get _cartTotal {
+    final total = _cartSubtotal - _itemDiscountAmount - _discountAmount;
+    return total < 0 ? 0 : total;
+  }
 
   int get _cartItemCount => _cart.values.fold(0, (sum, line) => sum + line.quantity);
 
@@ -112,7 +145,8 @@ class SellScreenState extends State<SellScreen> {
   }
 
   void _addToCart(Product product, ProductVariant variant, int qtyToAdd) {
-    final current = _cart[variant.id]?.quantity ?? 0;
+    final existing = _cart[variant.id];
+    final current = existing?.quantity ?? 0;
     final newQty = current + qtyToAdd;
     if (newQty > variant.quantity) {
       final label = product.name + (variant.hasVariantLabel ? ' (${variant.label})' : '');
@@ -121,7 +155,27 @@ class SellScreenState extends State<SellScreen> {
       );
       return;
     }
-    setState(() => _cart[variant.id] = CartLine(product: product, variant: variant, quantity: newQty));
+    setState(() {
+      _cart[variant.id] = CartLine(
+        product: product,
+        variant: variant,
+        quantity: newQty,
+        discountType: existing?.discountType ?? DiscountType.none,
+        discountValue: existing?.discountValue ?? 0,
+      );
+    });
+  }
+
+  void _setLineDiscountType(CartLine line, DiscountType type) {
+    setState(() {
+      if (type == DiscountType.none) {
+        _clearLineDiscount(line.variant.id);
+        _cart[line.variant.id] = line.copyWith(discountType: type, discountValue: 0);
+      } else {
+        _lineDiscountCtrl(line.variant.id);
+        _cart[line.variant.id] = line.copyWith(discountType: type);
+      }
+    });
   }
 
   void _onProductTap(Product product) {
@@ -140,21 +194,26 @@ class SellScreenState extends State<SellScreen> {
   void _increment(CartLine line) => _addToCart(line.product, line.variant, 1);
 
   void _decrement(CartLine line) {
-    final current = line.quantity;
-    if (current <= 1) {
-      setState(() => _cart.remove(line.variant.id));
+    if (line.quantity <= 1) {
+      _removeLine(line);
     } else {
-      setState(() => _cart[line.variant.id] = line.copyWith(quantity: current - 1));
+      setState(() => _cart[line.variant.id] = line.copyWith(quantity: line.quantity - 1));
     }
   }
 
   void _removeLine(CartLine line) {
-    setState(() => _cart.remove(line.variant.id));
+    setState(() {
+      _cart.remove(line.variant.id);
+      _clearLineDiscount(line.variant.id);
+    });
   }
 
   void _clearCart() {
     setState(() {
       _cart.clear();
+      for (final variantId in _lineDiscountCtrls.keys.toList()) {
+        _clearLineDiscount(variantId);
+      }
       _discountType = DiscountType.none;
       _discountCtrl.clear();
       _paymentMethod = PaymentMethod.cash;
@@ -176,6 +235,9 @@ class SellScreenState extends State<SellScreen> {
         paymentMethod: _paymentMethod,
       );
       _cart.clear();
+      for (final variantId in _lineDiscountCtrls.keys.toList()) {
+        _clearLineDiscount(variantId);
+      }
       _discountType = DiscountType.none;
       _discountCtrl.clear();
       _paymentMethod = PaymentMethod.cash;
@@ -232,10 +294,18 @@ class SellScreenState extends State<SellScreen> {
                                     .bodySmall
                                     ?.copyWith(color: Theme.of(context).colorScheme.outline),
                               ),
+                            if (line.hasDiscount)
+                              Text(
+                                'Discount -\u20b1${line.discountAmount.toStringAsFixed(2)}',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(color: Theme.of(context).colorScheme.error),
+                              ),
                           ],
                         ),
                       ),
-                      Text('\u20b1${line.subtotal.toStringAsFixed(2)}'),
+                      Text('\u20b1${line.net.toStringAsFixed(2)}'),
                     ],
                   ),
                 ),
@@ -248,6 +318,17 @@ class SellScreenState extends State<SellScreen> {
                   Text('\u20b1${sale.subtotal.toStringAsFixed(2)}'),
                 ],
               ),
+              if (sale.hasItemDiscount)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Item discount'),
+                      Text('-\u20b1${sale.itemDiscountAmount.toStringAsFixed(2)}'),
+                    ],
+                  ),
+                ),
               if (sale.hasDiscount)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
@@ -256,8 +337,8 @@ class SellScreenState extends State<SellScreen> {
                     children: [
                       Text(
                         sale.discountType == DiscountType.percent
-                            ? 'Discount (${sale.discountValue.toStringAsFixed(0)}%)'
-                            : 'Discount',
+                            ? 'Whole sale (${sale.discountValue.toStringAsFixed(0)}%)'
+                            : 'Whole sale',
                       ),
                       Text('-\u20b1${sale.discountAmount.toStringAsFixed(2)}'),
                     ],
@@ -306,7 +387,9 @@ class SellScreenState extends State<SellScreen> {
       appBar: AppBar(
         title: const Text('Sell'),
         actions: [
-          SheetSyncButton(onSynced: () { refresh(); }),
+          SheetSyncButton(onSynced: () {
+            refresh();
+          }),
           const SizedBox(width: 8),
         ],
       ),
@@ -348,9 +431,9 @@ class SellScreenState extends State<SellScreen> {
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
           child: TextField(
-            decoration: InputDecoration(
+            decoration: const InputDecoration(
               hintText: 'Search products to sell',
-              prefixIcon: const Icon(Icons.search),
+              prefixIcon: Icon(Icons.search),
               isDense: true,
             ),
             onChanged: (v) => setState(() => _query = v),
@@ -415,8 +498,7 @@ class SellScreenState extends State<SellScreen> {
               const SizedBox(width: 8),
               Text('Current sale', style: Theme.of(context).textTheme.titleLarge),
               const Spacer(),
-              if (cartLines.isNotEmpty)
-                TextButton(onPressed: _clearCart, child: const Text('Clear')),
+              if (cartLines.isNotEmpty) TextButton(onPressed: _clearCart, child: const Text('Clear')),
             ],
           ),
         ),
@@ -437,16 +519,18 @@ class SellScreenState extends State<SellScreen> {
                 )
               : ListView(
                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-                  children: cartLines
-                      .map(
-                        (line) => CartLineTile(
-                          cartLine: line,
-                          onIncrement: line.quantity < line.variant.quantity ? () => _increment(line) : null,
-                          onDecrement: () => _decrement(line),
-                          onRemove: () => _removeLine(line),
-                        ),
-                      )
-                      .toList(),
+                  children: [
+                    for (final line in cartLines)
+                      CartLineTile(
+                        cartLine: line,
+                        onIncrement: line.quantity < line.variant.quantity ? () => _increment(line) : null,
+                        onDecrement: () => _decrement(line),
+                        onRemove: () => _removeLine(line),
+                        onDiscountType: (type) => _setLineDiscountType(line, type),
+                        discountController:
+                            line.discountType == DiscountType.none ? null : _lineDiscountCtrl(line.variant.id),
+                      ),
+                  ],
                 ),
         ),
         _buildCheckoutBar(),
@@ -455,7 +539,9 @@ class SellScreenState extends State<SellScreen> {
   }
 
   Widget _buildCheckoutBar() {
-    final hasDiscount = _discountType != DiscountType.none && _discountAmount > 0;
+    final hasItemDiscount = _itemDiscountAmount > 0;
+    final hasSaleDiscount = _discountType != DiscountType.none && _discountAmount > 0;
+    final hasDiscount = hasItemDiscount || hasSaleDiscount;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
@@ -498,7 +584,7 @@ class SellScreenState extends State<SellScreen> {
           const SizedBox(height: 12),
           Row(
             children: [
-              Text('Discount', style: Theme.of(context).textTheme.bodyMedium),
+              Text('Whole sale', style: Theme.of(context).textTheme.bodyMedium),
               const SizedBox(width: 12),
               Expanded(
                 child: SegmentedButton<DiscountType>(
@@ -544,13 +630,27 @@ class SellScreenState extends State<SellScreen> {
               ),
             ],
           ),
-          if (hasDiscount)
+          if (hasItemDiscount)
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Discount', style: Theme.of(context).textTheme.bodyMedium),
+                  Text('Item discount', style: Theme.of(context).textTheme.bodyMedium),
+                  Text(
+                    '-\u20b1${_itemDiscountAmount.toStringAsFixed(2)}',
+                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                  ),
+                ],
+              ),
+            ),
+          if (hasSaleDiscount)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Whole sale', style: Theme.of(context).textTheme.bodyMedium),
                   Text(
                     '-\u20b1${_discountAmount.toStringAsFixed(2)}',
                     style: TextStyle(color: Theme.of(context).colorScheme.error),
@@ -599,7 +699,7 @@ class SellScreenState extends State<SellScreen> {
                 child: Text('$_cartItemCount item(s) • \u20b1${_cartTotal.toStringAsFixed(2)}'),
               ),
               OutlinedButton(
-                onPressed: () => _showCartSheet(),
+                onPressed: _showCartSheet,
                 child: const Text('View cart'),
               ),
               const SizedBox(width: 8),
@@ -618,15 +718,13 @@ class SellScreenState extends State<SellScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setSheetState) {
-          return FractionallySizedBox(
-            heightFactor: 0.75,
-            child: _buildCartPane(),
-          );
-        },
+      builder: (context) => FractionallySizedBox(
+        heightFactor: 0.75,
+        child: _buildCartPane(),
       ),
-    ).then((_) => setState(() {}));
+    ).then((_) {
+      if (mounted) setState(() {});
+    });
   }
 }
 
