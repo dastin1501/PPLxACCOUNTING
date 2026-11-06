@@ -161,6 +161,17 @@ class Sale {
   /// How the sale was paid for (cash or online).
   final PaymentMethod paymentMethod;
 
+  /// Photo of the paper receipt, stored on this device.
+  final String receiptImagePath;
+
+  /// Google Drive file created for [receiptImagePath], once sync has uploaded it.
+  final String receiptDriveFileId;
+  final String receiptDriveUrl;
+
+  /// Local path that [receiptDriveUrl] was created from. A different path
+  /// means the cashier replaced the photo and it should be uploaded again.
+  final String receiptDrivePath;
+
   const Sale({
     required this.id,
     required this.createdAt,
@@ -170,7 +181,13 @@ class Sale {
     this.discountValue = 0,
     this.discountAmount = 0,
     this.paymentMethod = PaymentMethod.cash,
+    this.receiptImagePath = '',
+    this.receiptDriveFileId = '',
+    this.receiptDriveUrl = '',
+    this.receiptDrivePath = '',
   });
+
+  bool get hasReceiptPhoto => receiptImagePath.isNotEmpty;
 
   double get subtotal => items.fold(0, (sum, item) => sum + item.subtotal);
 
@@ -210,6 +227,10 @@ class Sale {
       discountValue: (map['discountValue'] as num?)?.toDouble() ?? 0,
       discountAmount: (map['discountAmount'] as num?)?.toDouble() ?? 0,
       paymentMethod: PaymentMethod.fromDb(map['paymentMethod'] as String?),
+      receiptImagePath: map['receiptImagePath'] as String? ?? '',
+      receiptDriveFileId: map['receiptDriveFileId'] as String? ?? '',
+      receiptDriveUrl: map['receiptDriveUrl'] as String? ?? '',
+      receiptDrivePath: map['receiptDrivePath'] as String? ?? '',
     );
   }
 }

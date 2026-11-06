@@ -15,9 +15,11 @@ class ImageStorageService {
   /// can go stale (e.g. the file was moved/deleted outside the app).
   static bool exists(String? path) => path != null && path.isNotEmpty && File(path).existsSync();
 
-  static Future<Directory> _imagesDir() async {
+  static Future<Directory> _imagesDir() => _folder('product_images');
+
+  static Future<Directory> _folder(String name) async {
     final dir = await getApplicationDocumentsDirectory();
-    final imagesDir = Directory(p.join(dir.path, 'product_images'));
+    final imagesDir = Directory(p.join(dir.path, name));
     if (!await imagesDir.exists()) {
       await imagesDir.create(recursive: true);
     }
@@ -30,6 +32,16 @@ class ImageStorageService {
     final imagesDir = await _imagesDir();
     final ext = p.extension(sourcePath);
     final filename = '${const Uuid().v4()}$ext';
+    final destPath = p.join(imagesDir.path, filename);
+    await File(sourcePath).copy(destPath);
+    return destPath;
+  }
+
+  /// Copies a photographed paper receipt into its own folder.
+  static Future<String> saveReceiptImage(String sourcePath) async {
+    final imagesDir = await _folder('receipt_images');
+    final ext = p.extension(sourcePath);
+    final filename = '${const Uuid().v4()}${ext.isEmpty ? '.jpg' : ext}';
     final destPath = p.join(imagesDir.path, filename);
     await File(sourcePath).copy(destPath);
     return destPath;

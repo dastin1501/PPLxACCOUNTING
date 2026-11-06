@@ -5,6 +5,7 @@ import '../models/sale.dart';
 import '../services/database_helper.dart';
 import '../widgets/cart_line_tile.dart';
 import '../widgets/product_picker_tile.dart';
+import '../widgets/receipt_photo_panel.dart';
 import '../widgets/sheet_sync_button.dart';
 import '../widgets/variant_picker_sheet.dart';
 
@@ -270,8 +271,9 @@ class SellScreenState extends State<SellScreen> {
           ],
         ),
         content: SizedBox(
-          width: 320,
-          child: Column(
+          width: 360,
+          child: SingleChildScrollView(
+            child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -368,7 +370,13 @@ class SellScreenState extends State<SellScreen> {
                   ],
                 ),
               ),
+              const SizedBox(height: 12),
+              ReceiptPhotoPanel(
+                saleId: sale.id,
+                initialPath: sale.receiptImagePath,
+              ),
             ],
+            ),
           ),
         ),
         actions: [

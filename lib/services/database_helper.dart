@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 import '../models/adjustment.dart';
 import '../models/product.dart';
 import '../models/sale.dart';
+import 'image_storage_service.dart';
 
 /// Thrown when a sale can't be completed because one or more cart lines
 /// exceed the currently available stock quantity.
@@ -38,7 +39,7 @@ class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._internal();
 
   static const _dbName = 'pos_app.db';
-  static const _dbVersion = 11;
+  static const _dbVersion = 13;
 
   /// Legacy flat stock table (pre-variants). Only read during migration.
   static const _legacyStocksTable = 'stocks';
@@ -149,6 +150,10 @@ class DatabaseHelper {
     await _addColumnIfMissing(db, salesTable, 'sheetSyncedAt', 'TEXT');
     await _addColumnIfMissing(db, adjustmentsTable, 'sheetSyncedAt', 'TEXT');
     await _addColumnIfMissing(db, salesTable, 'receiptNumber', 'TEXT');
+    await _addColumnIfMissing(db, salesTable, 'receiptImagePath', 'TEXT');
+    await _addColumnIfMissing(db, salesTable, 'receiptDriveFileId', 'TEXT');
+    await _addColumnIfMissing(db, salesTable, 'receiptDriveUrl', 'TEXT');
+    await _addColumnIfMissing(db, salesTable, 'receiptDrivePath', 'TEXT');
     await _createSyncTables(db);
     await _backfillReceiptNumbers(db);
   }
@@ -332,7 +337,11 @@ class DatabaseHelper {
         discountAmount REAL NOT NULL DEFAULT 0,
         paymentMethod TEXT NOT NULL DEFAULT 'cash',
         sheetSyncedAt TEXT,
-        receiptNumber TEXT
+        receiptNumber TEXT,
+        receiptImagePath TEXT,
+        receiptDriveFileId TEXT,
+        receiptDriveUrl TEXT,
+        receiptDrivePath TEXT
       )
     ''');
     await db.execute('''
@@ -867,10 +876,56 @@ class DatabaseHelper {
     return added;
   }
 
+  /// Stores or clears the paper-receipt photo for a sale.
+  /// Replacing a photo deletes the previous file.
+  Future<void> setSaleReceiptImage(String saleId, String? path) async {
+    final db = await database;
+    final rows = await db.query(
+      salesTable,
+      columns: ['receiptImagePath'],
+      where: 'id = ?',
+      whereArgs: [saleId],
+    );
+    final previous = rows.isEmpty ? null : rows.first['receiptImagePath'] as String?;
+    await db.update(
+      salesTable,
+      {'receiptImagePath': (path == null || path.isEmpty) ? null : path},
+      where: 'id = ?',
+      whereArgs: [saleId],
+    );
+    if (previous != null && previous.isNotEmpty && previous != path) {
+      await ImageStorageService.deleteImage(previous);
+    }
+  }
+
+  /// Remembers the Google Drive copy of a receipt photo.
+  /// [uploadedPath] is the local file that was uploaded, so a later sync
+  /// can tell whether the cashier replaced the picture.
+  Future<void> setSaleReceiptDrive(
+    String saleId, {
+    required String fileId,
+    required String url,
+    required String uploadedPath,
+  }) async {
+    final db = await database;
+    await db.update(
+      salesTable,
+      {
+        'receiptDriveFileId': fileId.isEmpty ? null : fileId,
+        'receiptDriveUrl': url.isEmpty ? null : url,
+        'receiptDrivePath': uploadedPath.isEmpty ? null : uploadedPath,
+      },
+      where: 'id = ?',
+      whereArgs: [saleId],
+    );
+  }
+
   Future<void> deleteSale(String saleId) async {
     final db = await database;
+    String? receiptImage;
     await db.transaction((txn) async {
       final saleRows = await txn.query(salesTable, where: 'id = ?', whereArgs: [saleId]);
+      receiptImage = saleRows.isEmpty ? null : saleRows.first['receiptImagePath'] as String?;
       final saleSynced = saleRows.isNotEmpty && saleRows.first['sheetSyncedAt'] != null;
       final receipt = saleRows.isEmpty ? '' : saleRows.first['receiptNumber'] as String? ?? '';
       final sheetSaleId = receipt.isEmpty ? saleId : receipt;
@@ -994,5 +1049,6 @@ class DatabaseHelper {
       await txn.delete(saleItemsTable, where: 'saleId = ?', whereArgs: [saleId]);
       await txn.delete(salesTable, where: 'id = ?', whereArgs: [saleId]);
     });
+    await ImageStorageService.deleteImage(receiptImage);
   }
 }

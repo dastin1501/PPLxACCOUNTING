@@ -14,6 +14,9 @@
  * line or movement id sent again is updated in place, not duplicated.
  * Sale ID on the sheet is the receipt number from the app (S-0001).
  * SKUs stay text, so 00001 is not stored as 1.
+ * Receipt photos are saved in a Drive folder named "PPL Receipts".
+ * The Sales sheet stores the link, not the picture itself.
+ * Run authorizeDrive once and allow Drive, then deploy a new version.
  * New product rows you add on the sheet, with a blank Variant ID, are
  * given an id and downloaded by the tablet.
  */
@@ -31,7 +34,7 @@ var SALE_HEADERS = [
   'Line ID', 'Sale ID', 'Receipt Number', 'Date', 'Payment Method', 'Name', 'SKU', 'Size', 'Color',
   'Variant ID', 'Unit Price', 'Quantity', 'Line Subtotal', 'Item Discount Type',
   'Item Discount Value', 'Item Discount', 'Discount Type',
-  'Discount Value', 'Discount Amount', 'Sale Subtotal', 'Sale Total'
+  'Discount Value', 'Discount Amount', 'Sale Subtotal', 'Sale Total', 'Receipt Photo'
 ];
 var MOVEMENT_HEADERS = [
   'Movement ID', 'Date', 'Variant ID', 'SKU', 'Name', 'Size', 'Color', 'Delta',
@@ -110,6 +113,14 @@ function doPost(e) {
     var lock = LockService.getScriptLock();
     lock.waitLock(20000);
     try {
+      if (body.receiptPhoto) {
+        var saved = saveReceiptPhoto(body.receiptPhoto);
+        return json({ ok: true, fileId: saved.fileId, url: saved.url });
+      }
+      if (body.removeReceiptPhoto) {
+        removeReceiptPhoto(body.removeReceiptPhoto.fileId);
+        return json({ ok: true, removed: true });
+      }
       upsertProducts(body.products || []);
       var saleIds = upsertSales(body.sales || []);
       var movementIds = upsertMovements(body.movements || []);
@@ -199,16 +210,16 @@ function sheetSaleId(sale) {
   return receipt || String(sale.id || '');
 }
 
-function upsertSales(sales) {
-  var sheet = SpreadsheetApp.getActive().getSheetByName(SALES);
 function saleTotalCells(sale, line) {
+  var photo = line.includeSaleTotals === false ? '' : (sale.receiptPhotoUrl || '');
   if (line.includeSaleTotals === false) {
     return {
       'Discount Type': '',
       'Discount Value': '',
       'Discount Amount': '',
       'Sale Subtotal': '',
-      'Sale Total': ''
+      'Sale Total': '',
+      'Receipt Photo': ''
     };
   }
   return {
@@ -216,7 +227,8 @@ function saleTotalCells(sale, line) {
     'Discount Value': sale.discountValue || 0,
     'Discount Amount': sale.discountAmount || 0,
     'Sale Subtotal': sale.subtotal || 0,
-    'Sale Total': sale.total || 0
+    'Sale Total': sale.total || 0,
+    'Receipt Photo': photo
   };
 }
 
@@ -263,9 +275,52 @@ function upsertSales(sales) {
       };
       Object.keys(totals).forEach(function (header) { row[header] = totals[header]; });
       writeByHeaders(sheet, null, found.map, row);
+      found.index[id] = sheet.getLastRow();
+    });
     if (sale.id) accepted.push(sale.id);
   });
   return accepted;
+}
+
+// Run this once from the Apps Script editor so Google asks for Drive access.
+function authorizeDrive() {
+  var folder = receiptFolder();
+  Logger.log(folder.getUrl());
+}
+
+function receiptFolder() {
+  var name = 'PPL Receipts';
+  var found = DriveApp.getFoldersByName(name);
+  if (found.hasNext()) return found.next();
+  return DriveApp.createFolder(name);
+}
+
+function saveReceiptPhoto(photo) {
+  photo = photo || {};
+  var data = String(photo.data || '');
+  if (!data) throw new Error('Receipt photo was empty');
+  var previousId = String(photo.previousFileId || '');
+  if (previousId) removeReceiptPhoto(previousId);
+  var mime = String(photo.mimeType || 'image/jpeg');
+  var name = String(photo.fileName || ((photo.receiptNumber || 'receipt') + '.jpg'));
+  var blob = Utilities.newBlob(Utilities.base64Decode(data), mime, name);
+  var file = receiptFolder().createFile(blob);
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (err) {
+    // Some work accounts block public links. The file is still in Drive.
+  }
+  return { fileId: file.getId(), url: 'https://drive.google.com/file/d/' + file.getId() + '/view' };
+}
+
+function removeReceiptPhoto(fileId) {
+  var id = String(fileId || '');
+  if (!id) return;
+  try {
+    DriveApp.getFileById(id).setTrashed(true);
+  } catch (err) {
+    // Already deleted, or this script cannot see that file.
+  }
 }
 
 function upsertMovements(movements) {

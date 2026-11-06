@@ -6,6 +6,8 @@ import '../models/sale.dart';
 import '../services/database_helper.dart';
 import '../services/export_service.dart';
 import '../services/file_share_helper.dart';
+import '../services/image_storage_service.dart';
+import '../widgets/receipt_photo_panel.dart';
 import '../widgets/return_exchange_dialog.dart';
 import '../widgets/sheet_sync_button.dart';
 
@@ -80,6 +82,9 @@ class SalesHistoryScreenState extends State<SalesHistoryScreen> {
     }
     if (sale.hasDiscount) {
       parts.add('Whole sale -\u20b1${sale.discountAmount.toStringAsFixed(2)}');
+    }
+    if (ImageStorageService.exists(sale.receiptImagePath)) {
+      parts.add('Photo');
     }
     return parts.join('  •  ');
   }
@@ -438,6 +443,14 @@ class SalesHistoryScreenState extends State<SalesHistoryScreen> {
                                 ),
                               ),
                             ],
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                              child: ReceiptPhotoPanel(
+                                saleId: sale.id,
+                                initialPath: sale.receiptImagePath,
+                                onChanged: refresh,
+                              ),
+                            ),
                             Padding(
                               padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                               child: Align(

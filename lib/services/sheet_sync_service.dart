@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
@@ -71,6 +72,8 @@ class SheetSyncService {
 
       final products = await _db.getAllProducts();
       final unsyncedSales = await _db.getUnsyncedSales();
+      final salesBeforePhotos = await _db.getAllSales();
+      final photos = await _syncReceiptPhotos(config, salesBeforePhotos);
       final sales = await _db.getAllSales();
       final unsyncedAdjustments = await _db.getUnsyncedAdjustments();
       final adjustmentGroups = await _db.getAdjustmentsGroupedBySale();
@@ -129,6 +132,8 @@ class SheetSyncService {
           sales: saleIds.length,
           movements: pendingMovementIds.where(acceptedMovements.contains).length,
           imported: imported,
+          photos: photos.uploaded,
+          photoWarning: photos.warning,
         ),
         pushedSales: saleIds.length,
         pushedMovements: pendingMovementIds.length,
@@ -146,13 +151,101 @@ class SheetSyncService {
     }
   }
 
-  String _successMessage({required int sales, required int movements, required int imported}) {
+  String _successMessage({
+    required int sales,
+    required int movements,
+    required int imported,
+    required int photos,
+    String? photoWarning,
+  }) {
     final parts = <String>[];
     if (sales > 0) parts.add('$sales sale${sales == 1 ? '' : 's'}');
     if (movements > 0) parts.add('$movements stock change${movements == 1 ? '' : 's'}');
     if (imported > 0) parts.add('$imported new variant${imported == 1 ? '' : 's'} from the sheet');
-    if (parts.isEmpty) return 'Sheet is up to date';
-    return 'Synced ${parts.join(', ')}';
+    if (photos > 0) parts.add('$photos receipt photo${photos == 1 ? '' : 's'}');
+    final summary = parts.isEmpty ? 'Sheet is up to date' : 'Synced ${parts.join(', ')}';
+    if (photoWarning == null || photoWarning.isEmpty) return summary;
+    return '$summary. $photoWarning';
+  }
+
+  /// Uploads new or replaced receipt photos one at a time, and removes the
+  /// Drive file when the cashier deleted the picture. A photo problem does
+  /// not cancel the rest of the sync.
+  Future<({int uploaded, String? warning})> _syncReceiptPhotos(
+    SheetSyncConfig config,
+    List<Sale> sales,
+  ) async {
+    var uploaded = 0;
+    String? warning;
+    for (final sale in sales) {
+      final path = sale.receiptImagePath;
+      final hasFile = path.isNotEmpty && File(path).existsSync();
+      final alreadyUploaded = hasFile && path == sale.receiptDrivePath && sale.receiptDriveUrl.isNotEmpty;
+      if (alreadyUploaded) continue;
+      if (!hasFile && sale.receiptDriveFileId.isEmpty) continue;
+
+      try {
+        if (!hasFile) {
+          final response = await _withRetry(() => _post(config, {
+            'secret': config.secret.trim(),
+            'removeReceiptPhoto': {'fileId': sale.receiptDriveFileId},
+          }));
+          if (response['removed'] != true) {
+            warning = 'Receipt photos need the updated Apps Script. Deploy a new version, then sync again.';
+            break;
+          }
+          await _db.setSaleReceiptDrive(sale.id, fileId: '', url: '', uploadedPath: '');
+          continue;
+        }
+
+        final bytes = await File(path).readAsBytes();
+        final ext = _photoExtension(path);
+        final name = '${sale.receiptNumber.isEmpty ? sale.id : sale.receiptNumber}$ext';
+        final response = await _withRetry(() => _post(config, {
+          'secret': config.secret.trim(),
+          'receiptPhoto': {
+            'saleId': sale.id,
+            'receiptNumber': sale.receiptNumber,
+            'fileName': name,
+            'mimeType': _photoMime(ext),
+            'previousFileId': sale.receiptDriveFileId,
+            'data': base64Encode(bytes),
+          },
+        }));
+        final fileId = response['fileId']?.toString() ?? '';
+        final url = response['url']?.toString() ?? '';
+        if (fileId.isEmpty || url.isEmpty) {
+          warning = 'Receipt photos need the updated Apps Script. Deploy a new version, then sync again.';
+          break;
+        }
+        await _db.setSaleReceiptDrive(sale.id, fileId: fileId, url: url, uploadedPath: path);
+        uploaded += 1;
+      } on SheetSyncException catch (e) {
+        if (e.message.contains('shared secret')) rethrow;
+        warning = e.message;
+        break;
+      }
+    }
+    return (uploaded: uploaded, warning: warning);
+  }
+
+  String _photoExtension(String path) {
+    final dot = path.lastIndexOf('.');
+    if (dot < 0 || dot < path.length - 6) return '.jpg';
+    return path.substring(dot).toLowerCase();
+  }
+
+  String _photoMime(String ext) {
+    switch (ext) {
+      case '.png':
+        return 'image/png';
+      case '.webp':
+        return 'image/webp';
+      case '.gif':
+        return 'image/gif';
+      default:
+        return 'image/jpeg';
+    }
   }
 
   Future<T> _withRetry<T>(Future<T> Function() action) async {
@@ -283,6 +376,7 @@ class SheetSyncService {
       'discountAmount': sale.discountAmount,
       'subtotal': sale.subtotal,
       'total': sale.total,
+      'receiptPhotoUrl': sale.receiptDriveUrl,
       'lines': [
         for (var i = 0; i < sale.items.length; i++)
           {
